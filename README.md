@@ -1,6 +1,8 @@
 # Smart TASMAC — Consumer Regulation System
 ## Tamil Nadu State Marketing Corporation Ltd.
 
+The Smart TASMAC Consumer Regulation System is a web-based platform designed to improve transparency, encourage responsible alcohol consumption, and support government monitoring of alcohol sales. The system verifies consumers using Aadhaar-based identity authentication, and tracks alcohol purchases.
+
 > **கள்ளுண்ணாமை — Chapter 93, Thirukkural 922**
 > *"களித்தறியேன் என்பது கைவிடுக — நெஞ்சத்து வளர்த்தது வாய்க்கும் மதி."*
 > — Thiruvalluvar
