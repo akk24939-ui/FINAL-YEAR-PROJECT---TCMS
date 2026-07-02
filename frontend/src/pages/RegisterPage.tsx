@@ -3,8 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { authApi } from '../api/auth.api'
-import { useAuthStore } from '../store/authStore'
+import { consumerApi } from '../api/consumer.api'
 import { useThemeStore } from '../store/themeStore'
 import { Users, ShoppingBag, BarChart3, Stethoscope, Shield, ChevronRight, AlertCircle, CheckCircle } from 'lucide-react'
 
@@ -34,7 +33,6 @@ const districts = ['Chennai', 'Coimbatore', 'Madurai', 'Tiruchirappalli', 'Salem
 
 const RegisterPage: React.FC = () => {
   const navigate = useNavigate()
-  const { login } = useAuthStore()
   const { theme } = useThemeStore()
   const isDark = theme === 'dark'
 
@@ -61,12 +59,12 @@ const RegisterPage: React.FC = () => {
     setLoading(true)
     try {
       const payload = { ...formData, role: selectedRole }
-      const res = await authApi.register(payload)
-      const { access_token, refresh_token, user_id, role, full_name } = res.data
-      login({ id: user_id, full_name, email: formData.email, role }, access_token, refresh_token)
-      navigate(role === 'CONSUMER' ? '/consumer' : role === 'OPERATOR' ? '/operator' : role === 'ADMIN' ? '/admin' : role === 'DOCTOR' ? '/doctor' : '/caretaker')
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Registration failed. Please try again.')
+      await consumerApi.register(payload)
+      // Registration succeeded — redirect to login
+      navigate('/login?registered=1')
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg || 'Registration failed. Please try again.')
     } finally {
       setLoading(false)
     }

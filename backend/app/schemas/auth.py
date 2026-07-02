@@ -1,44 +1,33 @@
+from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
-from app.models.user import UserRole
-import uuid
-from datetime import datetime
 
 
-class RegisterRequest(BaseModel):
-    full_name: str = Field(..., min_length=2, max_length=200)
-    email: EmailStr
-    password: str = Field(..., min_length=8)
-    phone: str | None = None
-    role: UserRole = UserRole.CONSUMER
-    aadhaar_number: str | None = Field(None, min_length=12, max_length=12)
-    district: str | None = None
+class OtpRequest(BaseModel):
+    """Request to send an OTP."""
+    mobile_number: str = Field(..., pattern=r"^\d{10}$", description="10-digit mobile number")
+
+
+class OtpVerify(BaseModel):
+    """Verify an OTP."""
+    mobile_number: str = Field(..., pattern=r"^\d{10}$")
+    otp_code: str = Field(..., pattern=r"^\d{6}$", description="6-digit OTP code")
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
+    """Login can use mobile number OR the masked Aadhaar (last 4)."""
+    identifier: str = Field(
+        ..., 
+        description="Either 10-digit mobile number or Aadhaar last 4 digits (e.g., '1234')"
+    )
+    password: str = Field(...)
 
 
-class TokenResponse(BaseModel):
+class CookieTokenResponse(BaseModel):
+    """Response returned when login succeeds.
+    Notice that the refresh_token is missing here because it is sent via httpOnly cookie.
+    """
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
     user_id: str
     role: str
     full_name: str
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-class UserResponse(BaseModel):
-    id: uuid.UUID
-    full_name: str
-    email: str
-    role: UserRole
-    is_active: bool
-    district: str | None
-    created_at: datetime
-
-    model_config = {"from_attributes": True}

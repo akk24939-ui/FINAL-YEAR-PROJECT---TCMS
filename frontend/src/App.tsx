@@ -1,96 +1,57 @@
-import React from 'react'
+import React, { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
-import LandingPage from './pages/LandingPage'
-import LoginPage from './pages/LoginPage'
-import RegisterPage from './pages/RegisterPage'
-import ConsumerDashboard from './pages/consumer/ConsumerDashboard'
-import AdminDashboard from './pages/admin/AdminDashboard'
-import './styles/globals.css'
 
-// Protected Route component
-interface ProtectedRouteProps {
-  children: React.ReactNode
-  allowedRoles?: string[]
-}
+// ── Lazy-loaded pages ───────────────────────────────────────────────────────
+const LandingPage         = lazy(() => import('./pages/LandingPage'))
+const LoginPage           = lazy(() => import('./pages/LoginPage'))
+const ConsumerDashboard   = lazy(() => import('./pages/consumer/ConsumerDashboard'))
+const RegisterPage        = lazy(() => import('./pages/consumer/register/RegisterPage'))
+const ProfilePage         = lazy(() => import('./pages/consumer/profile/ProfilePage'))
+const LimitsPage          = lazy(() => import('./pages/consumer/limits/LimitsPage'))
+const TeetotalerPage      = lazy(() => import('./pages/consumer/teetotaler/TeetotalerPage'))
+const PurchaseHistoryPage = lazy(() => import('./pages/consumer/purchases/PurchaseHistoryPage'))
+const QrPage              = lazy(() => import('./pages/consumer/qr/QrPage'))
+const PdfDownloadPage     = lazy(() => import('./pages/consumer/pdf/PdfDownloadPage'))
 
-const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles }) => {
+// ── Protected Route ─────────────────────────────────────────────────────────
+const ProtectedRoute: React.FC<{ children: React.ReactNode; role?: string }> = ({ children, role }) => {
   const { isAuthenticated, user } = useAuthStore()
-
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />
-  }
-
-  if (allowedRoles && user && !allowedRoles.includes(user.role)) {
-    return <Navigate to="/" replace />
-  }
-
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  if (role && user?.role !== role) return <Navigate to="/login" replace />
   return <>{children}</>
 }
 
-// Placeholder dashboards for roles not yet built
-const PlaceholderDashboard: React.FC<{ role: string }> = ({ role }) => {
-  const { user } = useAuthStore()
-  return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: '#0D1F1A' }}>
-      <div className="text-center p-12 rounded-2xl border border-amber-400/20" style={{ background: 'rgba(26,60,52,0.4)' }}>
-        <p className="text-4xl mb-4">🎉</p>
-        <h1 className="text-2xl font-bold text-white mb-2">Welcome, {user?.full_name}!</h1>
-        <p className="text-amber-400 mb-1">{role} Dashboard</p>
-        <p className="text-gray-400 text-sm">Role: {user?.role}</p>
-        <p className="text-gray-500 text-xs mt-4">Smart TASMAC — नुकर्वोர் கட்டுப்பாட்டு அமைப்பு</p>
-      </div>
-    </div>
-  )
-}
+// ── Loading spinner ─────────────────────────────────────────────────────────
+const PageLoader = () => (
+  <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0D1F1A' }}>
+    <div style={{ width: 40, height: 40, border: '4px solid #22C55E', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+  </div>
+)
 
-const App: React.FC = () => {
-  return (
+// ── App — no BrowserRouter here, main.tsx provides it ──────────────────────
+const App: React.FC = () => (
+  <Suspense fallback={<PageLoader />}>
     <Routes>
-      {/* Public routes */}
-      <Route path="/" element={<LandingPage />} />
-      <Route path="/login" element={<LoginPage />} />
+      {/* Public */}
+      <Route path="/"         element={<LandingPage />} />
+      <Route path="/login"    element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 
-      {/* Consumer routes */}
-      <Route path="/consumer/*" element={
-        <ProtectedRoute allowedRoles={['CONSUMER']}>
-          <ConsumerDashboard />
-        </ProtectedRoute>
-      } />
+      {/* Consumer Module */}
+      <Route path="/consumer"           element={<ProtectedRoute role="CONSUMER"><ConsumerDashboard /></ProtectedRoute>} />
+      <Route path="/consumer/profile"   element={<ProtectedRoute role="CONSUMER"><ProfilePage /></ProtectedRoute>} />
+      <Route path="/consumer/limits"    element={<ProtectedRoute role="CONSUMER"><LimitsPage /></ProtectedRoute>} />
+      <Route path="/consumer/teetotaler" element={<ProtectedRoute role="CONSUMER"><TeetotalerPage /></ProtectedRoute>} />
+      <Route path="/consumer/purchases" element={<ProtectedRoute role="CONSUMER"><PurchaseHistoryPage /></ProtectedRoute>} />
+      <Route path="/consumer/qr"        element={<ProtectedRoute role="CONSUMER"><QrPage /></ProtectedRoute>} />
+      <Route path="/consumer/pdf"       element={<ProtectedRoute role="CONSUMER"><PdfDownloadPage /></ProtectedRoute>} />
 
-      {/* Operator routes */}
-      <Route path="/operator/*" element={
-        <ProtectedRoute allowedRoles={['OPERATOR']}>
-          <PlaceholderDashboard role="Shop Operator" />
-        </ProtectedRoute>
-      } />
-
-      {/* Admin routes */}
-      <Route path="/admin/*" element={
-        <ProtectedRoute allowedRoles={['ADMIN']}>
-          <AdminDashboard />
-        </ProtectedRoute>
-      } />
-
-      {/* Doctor routes */}
-      <Route path="/doctor/*" element={
-        <ProtectedRoute allowedRoles={['DOCTOR']}>
-          <PlaceholderDashboard role="Doctor" />
-        </ProtectedRoute>
-      } />
-
-      {/* Caretaker routes */}
-      <Route path="/caretaker/*" element={
-        <ProtectedRoute allowedRoles={['CARETAKER']}>
-          <PlaceholderDashboard role="Caretaker" />
-        </ProtectedRoute>
-      } />
-
-      {/* 404 fallback */}
+      {/* Catch-all */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
-  )
-}
+  </Suspense>
+)
 
 export default App

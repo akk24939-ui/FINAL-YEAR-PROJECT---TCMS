@@ -1,115 +1,248 @@
-import secrets
-from datetime import datetime, timezone, date
+"""Consumer profile service.
+
+IDOR protection: user identity is ALWAYS taken from the JWT-validated User object
+passed in — never from request body or path parameters.
+"""
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
-from app.models.consumer_profile import ConsumerProfile
-from app.models.purchase import Purchase
-from app.models.alert import Alert, AlertType
+
+from app.core.config import settings
+from app.core.security import decrypt_aadhaar, mask_aadhaar
+from app.models.audit_log import AuditEventType, AuditLog
+from app.models.consumer_profile import BeveragePreference, ConsumerProfile, Gender
+from app.models.notification import (
+    Notification,
+    NotificationCategory,
+    NotificationType,
+)
+from app.models.restriction import SelfRestriction
 from app.models.user import User
-from app.schemas.consumer import ConsumerProfileResponse, UpdateLimitsRequest, ConsumerStatsResponse
-from fastapi import HTTPException
-import qrcode
-import io
-import base64
+from app.schemas.consumer import (
+    ConsumerProfileResponse,
+    SelfRestrictionResponse,
+)
+from app.services.image_service import strip_exif_and_reencode
 
 
-def get_profile(db: Session, user_id: str) -> ConsumerProfileResponse:
-    profile = db.query(ConsumerProfile).filter(ConsumerProfile.user_id == user_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Consumer profile not found")
-    return ConsumerProfileResponse.model_validate(profile)
+# ── Internal helpers ───────────────────────────────────────────────────────────
+
+def _write_audit(
+    db: Session,
+    event_type: AuditEventType,
+    *,
+    user_id,
+    description: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+    ip_address: Optional[str] = None,
+) -> None:
+    try:
+        log = AuditLog(
+            user_id=user_id,
+            event_type=event_type,
+            description=description,
+            metadata_json=metadata_json,
+            ip_address=ip_address,
+        )
+        db.add(log)
+        db.flush()
+    except Exception:
+        pass
 
 
-def update_limits(db: Session, user_id: str, data: UpdateLimitsRequest) -> ConsumerProfileResponse:
-    profile = db.query(ConsumerProfile).filter(ConsumerProfile.user_id == user_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Consumer profile not found")
-
-    if data.daily_limit_ml is not None:
-        profile.daily_limit_ml = data.daily_limit_ml
-    if data.weekly_limit_ml is not None:
-        profile.weekly_limit_ml = data.weekly_limit_ml
-    if data.monthly_limit_ml is not None:
-        profile.monthly_limit_ml = data.monthly_limit_ml
-
-    db.commit()
-    db.refresh(profile)
-    return ConsumerProfileResponse.model_validate(profile)
+def _fetch_profile(user: User, db: Session) -> ConsumerProfile:
+    profile = (
+        db.query(ConsumerProfile)
+        .filter(ConsumerProfile.user_id == user.id)
+        .first()
+    )
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Consumer profile not found",
+        )
+    return profile
 
 
-def toggle_teetotaler(db: Session, user_id: str) -> dict:
-    profile = db.query(ConsumerProfile).filter(ConsumerProfile.user_id == user_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Consumer profile not found")
-    profile.is_teetotaler = not profile.is_teetotaler
-    db.commit()
-    return {"is_teetotaler": profile.is_teetotaler, "message": "Teetotaler mode updated"}
-
-
-def get_stats(db: Session, user_id: str) -> ConsumerStatsResponse:
-    profile = db.query(ConsumerProfile).filter(ConsumerProfile.user_id == user_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Consumer profile not found")
-
-    today = date.today()
-    today_start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
-
-    today_ml = db.query(func.coalesce(func.sum(Purchase.quantity_ml), 0)).filter(
-        Purchase.consumer_id == user_id,
-        Purchase.purchased_at >= today_start
-    ).scalar() or 0
-
-    week_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0) 
-    week_start = week_start.replace(day=today.day - today.weekday())
-    week_ml = db.query(func.coalesce(func.sum(Purchase.quantity_ml), 0)).filter(
-        Purchase.consumer_id == user_id,
-        Purchase.purchased_at >= week_start
-    ).scalar() or 0
-
-    month_start = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
-    month_ml = db.query(func.coalesce(func.sum(Purchase.quantity_ml), 0)).filter(
-        Purchase.consumer_id == user_id,
-        Purchase.purchased_at >= month_start
-    ).scalar() or 0
-
-    daily_pct = min(100.0, (today_ml / max(profile.daily_limit_ml, 1)) * 100)
-    weekly_pct = min(100.0, (week_ml / max(profile.weekly_limit_ml, 1)) * 100)
-    monthly_pct = min(100.0, (month_ml / max(profile.monthly_limit_ml, 1)) * 100)
-
-    max_pct = max(daily_pct, weekly_pct, monthly_pct)
-    status = "safe" if max_pct < 75 else ("warning" if max_pct < 100 else "exceeded")
-
-    return ConsumerStatsResponse(
-        today_ml=int(today_ml),
-        week_ml=int(week_ml),
-        month_ml=int(month_ml),
-        daily_limit_ml=profile.daily_limit_ml,
-        weekly_limit_ml=profile.weekly_limit_ml,
-        monthly_limit_ml=profile.monthly_limit_ml,
-        daily_percent=round(daily_pct, 1),
-        weekly_percent=round(weekly_pct, 1),
-        monthly_percent=round(monthly_pct, 1),
-        is_teetotaler=profile.is_teetotaler,
-        status=status,
+def _fetch_restriction(user: User, db: Session) -> Optional[SelfRestriction]:
+    return (
+        db.query(SelfRestriction)
+        .filter(SelfRestriction.user_id == user.id)
+        .first()
     )
 
 
-def generate_qr(db: Session, user_id: str) -> dict:
-    profile = db.query(ConsumerProfile).filter(ConsumerProfile.user_id == user_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Consumer profile not found")
+def _build_response(
+    user: User,
+    profile: ConsumerProfile,
+    restriction: Optional[SelfRestriction],
+    raw_aadhaar: str,
+) -> ConsumerProfileResponse:
+    restriction_resp = None
+    if restriction:
+        restriction_resp = SelfRestrictionResponse(
+            daily_limit_sd=restriction.daily_limit_sd,
+            weekly_limit_sd=restriction.weekly_limit_sd,
+            monthly_limit_sd=restriction.monthly_limit_sd,
+            pending_daily_limit_sd=restriction.pending_daily_limit_sd,
+            pending_weekly_limit_sd=restriction.pending_weekly_limit_sd,
+            pending_monthly_limit_sd=restriction.pending_monthly_limit_sd,
+            lock_requested_at=restriction.lock_requested_at,
+            is_locked=restriction.is_locked,
+            locked_until=restriction.locked_until,
+            lock_reason=restriction.lock_reason,
+        )
 
-    if not profile.qr_token:
-        profile.qr_token = secrets.token_urlsafe(32)
-        db.commit()
+    return ConsumerProfileResponse(
+        id=profile.id,
+        user_id=user.id,
+        full_name=user.full_name,
+        email=user.email,
+        mobile_number=user.mobile_number,
+        aadhaar_masked=mask_aadhaar(raw_aadhaar),
+        dob=profile.dob,
+        gender=profile.gender,
+        district=profile.district,
+        address=profile.address,
+        photo_path=profile.photo_path,
+        beverage_preference=profile.beverage_preference,
+        is_teetotaler=profile.is_teetotaler,
+        teetotaler_set_at=profile.teetotaler_set_at,
+        restrictions=restriction_resp,
+    )
 
-    qr = qrcode.QRCode(version=1, box_size=10, border=4)
-    qr.add_data(profile.qr_token)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="#1A3C34", back_color="white")
 
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
-    qr_b64 = base64.b64encode(buffer.getvalue()).decode()
+# ── Public service functions ───────────────────────────────────────────────────
 
-    return {"qr_token": profile.qr_token, "qr_image_base64": qr_b64}
+def get_profile(user: User, db: Session) -> ConsumerProfileResponse:
+    """Return the consumer's profile with masked Aadhaar.
+
+    Ownership enforced by *user* coming exclusively from JWT `sub` claim.
+    """
+    profile = _fetch_profile(user, db)
+    restriction = _fetch_restriction(user, db)
+
+    raw_aadhaar = (
+        decrypt_aadhaar(profile.aadhaar_encrypted)
+        if profile.aadhaar_encrypted
+        else "000000000000"
+    )
+    return _build_response(user, profile, restriction, raw_aadhaar)
+
+
+def update_profile(user: User, data: dict, db: Session) -> ConsumerProfileResponse:
+    """Update allowed non-sensitive profile fields.
+
+    Only district, gender, address, and beverage_preference can be changed here.
+    Sensitive fields (Aadhaar, DOB, name) require a separate verified flow.
+    """
+    profile = _fetch_profile(user, db)
+
+    allowed_fields = {"district", "gender", "address", "beverage_preference"}
+    updated: dict = {}
+    for field, value in data.items():
+        if field in allowed_fields and value is not None:
+            # Validate enum types
+            if field == "gender" and isinstance(value, str):
+                value = Gender(value)
+            if field == "beverage_preference" and isinstance(value, str):
+                value = BeveragePreference(value)
+            setattr(profile, field, value)
+            updated[field] = str(value)
+
+    _write_audit(
+        db,
+        AuditEventType.PROFILE_UPDATED,
+        user_id=user.id,
+        description="Consumer profile updated",
+        metadata_json={"updated_fields": list(updated.keys())},
+    )
+    db.commit()
+    db.refresh(profile)
+
+    restriction = _fetch_restriction(user, db)
+    raw_aadhaar = (
+        decrypt_aadhaar(profile.aadhaar_encrypted)
+        if profile.aadhaar_encrypted
+        else "000000000000"
+    )
+    return _build_response(user, profile, restriction, raw_aadhaar)
+
+
+def upload_photo(user: User, file_bytes: bytes, db: Session) -> str:
+    """Strip EXIF, save photo, update profile, write audit.
+
+    File is named by user UUID so there is no ambiguity and no path traversal
+    risk from user-supplied filenames.
+    """
+    clean_bytes = strip_exif_and_reencode(file_bytes)
+
+    upload_dir = settings.UPLOAD_DIR
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.join(upload_dir, f"{user.id}.jpg")
+
+    with open(file_path, "wb") as f:
+        f.write(clean_bytes)
+
+    profile = _fetch_profile(user, db)
+    profile.photo_path = file_path
+
+    _write_audit(
+        db,
+        AuditEventType.PHOTO_UPLOADED,
+        user_id=user.id,
+        description="Profile photo updated",
+    )
+    db.commit()
+    return file_path
+
+
+def toggle_teetotaler(
+    user: User, enabled: bool, db: Session
+) -> ConsumerProfileResponse:
+    """Enable or disable teetotaler mode for the consumer."""
+    profile = _fetch_profile(user, db)
+    profile.is_teetotaler = enabled
+    profile.teetotaler_set_at = datetime.now(timezone.utc) if enabled else None
+
+    event = (
+        AuditEventType.TEETOTALER_ENABLED if enabled else AuditEventType.TEETOTALER_DISABLED
+    )
+    _write_audit(
+        db,
+        event,
+        user_id=user.id,
+        description=f"Teetotaler mode {'enabled' if enabled else 'disabled'}",
+    )
+
+    # Create in-app notification
+    notif_title = "Teetotaler Mode Enabled" if enabled else "Teetotaler Mode Disabled"
+    notif_msg = (
+        "You have enabled teetotaler mode. Purchases are now blocked."
+        if enabled
+        else "You have disabled teetotaler mode. Purchases are now allowed."
+    )
+    notification = Notification(
+        user_id=user.id,
+        notification_type=NotificationType.INFO,
+        category=NotificationCategory.TEETOTALER,
+        title=notif_title,
+        message=notif_msg,
+    )
+    db.add(notification)
+
+    db.commit()
+    db.refresh(profile)
+
+    restriction = _fetch_restriction(user, db)
+    raw_aadhaar = (
+        decrypt_aadhaar(profile.aadhaar_encrypted)
+        if profile.aadhaar_encrypted
+        else "000000000000"
+    )
+    return _build_response(user, profile, restriction, raw_aadhaar)

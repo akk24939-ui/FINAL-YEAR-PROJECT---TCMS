@@ -1,78 +1,52 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+"""Smart TASMAC — FastAPI application entry point."""
+import os
 from contextlib import asynccontextmanager
-from app.core.config import settings
-from app.core.database import create_tables
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 from app.api.v1.router import api_router
+from app.core.config import settings
+from app.core.limiter import limiter
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create tables
-    create_tables()
+    """Startup tasks."""
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     yield
-    # Shutdown: cleanup (if needed)
 
 
 app = FastAPI(
-    title="Smart TASMAC API",
-    description="""
-## Smart TASMAC — Consumer Regulation System
-**Tamil Nadu State Marketing Corporation Ltd.**
-Prohibition & Excise Department, Government of Tamil Nadu
-
-TASMAC HQ: No. 800, Anna Salai, Chennai — 600 002
-
-### Features
-- Consumer registration with mock Aadhaar verification
-- Self-limit setting (daily/weekly/monthly)
-- QR code consumer identity
-- Teetotaler mode
-- Purchase recording with limit enforcement
-- Government analytics dashboard
-- Doctor health trends (anonymized)
-- Caretaker monitoring with consent
-
-> This is an educational demonstration platform. Uses mock Aadhaar data.
-    """,
-    version=settings.APP_VERSION,
+    title="Smart TASMAC Consumer Regulation System",
+    description="Tamil Nadu State Marketing Corporation — Consumer Module API",
+    version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
 )
 
-# CORS
+# ── Rate limiter ───────────────────────────────────────────────────────────────
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── CORS — locked to explicit origin only ─────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=[settings.ALLOWED_ORIGIN],
+    allow_credentials=True,   # required for httpOnly cookie auth
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include all routes
-app.include_router(api_router)
+# ── Routes ─────────────────────────────────────────────────────────────────────
+app.include_router(api_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["Health"])
 def health_check():
     return {
-        "status": "healthy",
-        "app": "Smart TASMAC API",
-        "version": settings.APP_VERSION,
-        "authority": "Tamil Nadu State Marketing Corporation Ltd.",
-        "hq": "No. 800, Anna Salai, Chennai — 600 002",
-    }
-
-
-@app.get("/", tags=["Root"])
-def root():
-    return {
-        "message": "Welcome to Smart TASMAC API",
-        "docs": "/docs",
-        "redoc": "/redoc",
-        "health": "/health",
-        "thirukkural": "களித்தறியேன் என்பது கைவிடுக — நெஞ்சத்து வளர்த்தது வாய்க்கும் மதி.",
-        "kural_english": "A mind that rejects intoxication grows in wisdom.",
-        "kural_ref": "Thirukkural 922 — Chapter 93: கள்ளுண்ணாமை",
+        "status": "ok",
+        "service": "Smart TASMAC API",
+        "version": "1.0.0",
     }

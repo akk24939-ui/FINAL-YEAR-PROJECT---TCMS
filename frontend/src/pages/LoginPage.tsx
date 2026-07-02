@@ -1,169 +1,204 @@
 import React, { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Eye, EyeOff, LogIn, AlertCircle } from 'lucide-react'
+import { useNavigate, Link } from 'react-router-dom'
+import { Eye, EyeOff, Loader2, LogIn, AlertCircle, Info } from 'lucide-react'
 import { authApi } from '../api/auth.api'
 import { useAuthStore } from '../store/authStore'
-import { useThemeStore } from '../store/themeStore'
+import OtpModal from './consumer/auth/OtpModal'
 
-const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+// ─── Schema ───────────────────────────────────────────────────────────────────
+const schema = z.object({
+  identifier: z.string().min(4, 'Enter your mobile number or Aadhaar last 4 digits'),
+  password: z.string().min(1, 'Password is required'),
 })
+type FormValues = z.infer<typeof schema>
 
-type LoginFormData = z.infer<typeof loginSchema>
-
-const DEMO_CREDENTIALS = [
-  { role: 'Admin', email: 'admin@tasmac.gov.in', password: 'Admin@1234' },
-  { role: 'Consumer', email: 'consumer@test.com', password: 'Test@1234' },
-  { role: 'Operator', email: 'operator@test.com', password: 'Test@1234' },
-  { role: 'Doctor', email: 'doctor@test.com', password: 'Test@1234' },
-  { role: 'Caretaker', email: 'caretaker@test.com', password: 'Test@1234' },
-]
-
-const ROLE_ROUTES: Record<string, string> = {
-  ADMIN: '/admin',
+// ─── Role-based redirect map ──────────────────────────────────────────────────
+const ROLE_REDIRECT: Record<string, string> = {
   CONSUMER: '/consumer',
   OPERATOR: '/operator',
+  ADMIN: '/admin',
   DOCTOR: '/doctor',
   CARETAKER: '/caretaker',
 }
 
+// ─── Component ────────────────────────────────────────────────────────────────
 const LoginPage: React.FC = () => {
   const navigate = useNavigate()
   const { login } = useAuthStore()
-  const { theme } = useThemeStore()
-  const isDark = theme === 'dark'
   const [showPwd, setShowPwd] = useState(false)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const { register, handleSubmit, setValue, formState: { errors } } = useForm<LoginFormData>({
-    resolver: zodResolver(loginSchema),
+  const [serverError, setServerError] = useState<string | null>(null)
+  const [otpState, setOtpState] = useState<{ open: boolean; mobile: string }>({
+    open: false,
+    mobile: '',
   })
 
-  const onSubmit = async (data: LoginFormData) => {
-    setError('')
-    setLoading(true)
+  const {
+    register,
+    handleSubmit,
+    getValues,
+    formState: { errors, isSubmitting },
+  } = useForm<FormValues>({ resolver: zodResolver(schema) })
+
+  const onSubmit = async (values: FormValues) => {
+    setServerError(null)
     try {
-      const res = await authApi.login(data)
-      const { access_token, refresh_token, user_id, role, full_name } = res.data
-      login({ id: user_id, full_name, email: data.email, role }, access_token, refresh_token)
-      navigate(ROLE_ROUTES[role] || '/')
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Login failed. Please check your credentials.')
-    } finally {
-      setLoading(false)
+      const resp = await authApi.login(values.identifier, values.password)
+      const data = resp.data
+
+      if ((data as { requires_otp?: boolean }).requires_otp) {
+        setOtpState({
+          open: true,
+          mobile: values.identifier,
+        })
+        login({ id: data.user_id, full_name: data.full_name, role: data.role }, data.access_token)
+        return
+      }
+
+      login({ id: data.user_id, full_name: data.full_name, role: data.role }, data.access_token)
+      navigate(ROLE_REDIRECT[data.role] ?? '/')
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setServerError(msg ?? 'Invalid credentials. Please try again.')
     }
   }
 
-  const cardBg = isDark ? 'rgba(13,31,26,0.95)' : 'white'
-  const inputBg = isDark ? 'rgba(26,60,52,0.3)' : '#F9FAFB'
-  const inputBorder = isDark ? '#374151' : '#D1D5DB'
-  const textMain = isDark ? '#F0FDF4' : '#1A1A1A'
-  const textSub = isDark ? '#9CA3AF' : '#6B7280'
+  const handleOtpVerified = () => {
+    const user = useAuthStore.getState().user
+    navigate(ROLE_REDIRECT[user?.role ?? ''] ?? '/')
+  }
+
+  const inputCls = (hasError: boolean) =>
+    [
+      'w-full bg-white/5 border rounded-xl px-4 py-3 text-white placeholder-white/30 text-sm outline-none transition-all',
+      hasError
+        ? 'border-red-500/60 focus:border-red-400'
+        : 'border-white/15 focus:border-[#F97316] hover:border-white/30',
+    ].join(' ')
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-12"
-      style={{ background: isDark ? 'linear-gradient(135deg, #0D1F1A 0%, #1A3C34 100%)' : 'linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%)' }}>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#0D1F1A] via-[#1A3C34] to-[#0D2B22] p-4">
+      {/* OTP Modal */}
+      {otpState.open && (
+        <OtpModal
+          mobileNumber={otpState.mobile}
+          onVerified={handleOtpVerified}
+          onClose={() => setOtpState({ open: false, mobile: '' })}
+        />
+      )}
 
-      {/* Background decoration */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full opacity-20 blur-3xl"
-          style={{ background: '#F97316' }} />
-        <div className="absolute bottom-1/4 right-1/4 w-64 h-64 rounded-full opacity-10 blur-2xl"
-          style={{ background: '#D4AF37' }} />
-      </div>
-
-      <div className="relative w-full max-w-md">
-        {/* Header */}
+      <div className="w-full max-w-md">
+        {/* Logo / branding */}
         <div className="text-center mb-8">
-          <Link to="/" className="inline-flex items-center gap-2 mb-6">
-            <span className="text-3xl font-black" style={{ color: '#F97316' }}>Smart TASMAC</span>
-          </Link>
-          <h1 className="text-2xl font-bold mb-2" style={{ color: textMain }}>Welcome Back</h1>
-          <p style={{ color: textSub }}>Sign in to your account</p>
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#D4AF37]/10 border border-[#D4AF37]/30 mb-4">
+            <span className="text-3xl">🏛️</span>
+          </div>
+          <h1 className="text-2xl font-bold text-white">Smart TASMAC</h1>
+          <p className="text-white/50 text-sm mt-1">Consumer Management System</p>
         </div>
 
-        {/* Card */}
-        <div className="rounded-2xl p-8 border shadow-2xl"
-          style={{ background: cardBg, borderColor: isDark ? 'rgba(212,175,55,0.2)' : '#E5E7EB' }}>
+        {/* Glassmorphism card */}
+        <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl p-8">
+          <h2 className="text-xl font-bold text-white mb-1">Sign In</h2>
+          <p className="text-sm text-white/50 mb-6">Welcome back. Enter your credentials to continue.</p>
 
-          {error && (
-            <div className="flex items-center gap-2 p-4 rounded-xl mb-6 border border-red-500/30 bg-red-500/10">
-              <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
-              <p className="text-red-400 text-sm">{error}</p>
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium mb-2" style={{ color: textMain }}>
-                Email Address
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            {/* Identifier */}
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-white/60 uppercase tracking-wide">
+                Mobile Number or Aadhaar Last 4 Digits
               </label>
               <input
-                {...register('email')}
-                type="email"
-                placeholder="admin@tasmac.gov.in"
-                className="w-full px-4 py-3 rounded-xl border outline-none transition-all focus:border-orange-400"
-                style={{ background: inputBg, borderColor: inputBorder, color: textMain }}
-                aria-label="Email address"
+                className={inputCls(!!errors.identifier)}
+                placeholder="e.g. 9876543210 or last 4 of Aadhaar"
+                inputMode="numeric"
+                {...register('identifier')}
               />
-              {errors.email && <p className="text-red-400 text-xs mt-1">{errors.email.message}</p>}
+              {errors.identifier && (
+                <p className="text-red-400 text-xs">{errors.identifier.message}</p>
+              )}
             </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-2" style={{ color: textMain }}>Password</label>
+            {/* Password */}
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-white/60 uppercase tracking-wide">
+                Password
+              </label>
               <div className="relative">
                 <input
-                  {...register('password')}
                   type={showPwd ? 'text' : 'password'}
-                  placeholder="••••••••"
-                  className="w-full px-4 py-3 pr-12 rounded-xl border outline-none transition-all focus:border-orange-400"
-                  style={{ background: inputBg, borderColor: inputBorder, color: textMain }}
-                  aria-label="Password"
+                  className={inputCls(!!errors.password)}
+                  placeholder="Your password"
+                  {...register('password')}
                 />
-                <button type="button" onClick={() => setShowPwd(!showPwd)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2" style={{ color: textSub }}
-                  aria-label="Toggle password visibility">
-                  {showPwd ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                <button
+                  type="button"
+                  onClick={() => setShowPwd(!showPwd)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70 transition-colors"
+                  aria-label="Toggle password visibility"
+                >
+                  {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              {errors.password && <p className="text-red-400 text-xs mt-1">{errors.password.message}</p>}
+              {errors.password && (
+                <p className="text-red-400 text-xs">{errors.password.message}</p>
+              )}
             </div>
 
-            <button type="submit" disabled={loading}
-              className="w-full py-3.5 rounded-xl font-bold text-white transition-all hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ background: 'linear-gradient(135deg, #1A3C34, #2D6A4F)' }}>
-              {loading ? (
-                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            {/* Server error */}
+            {serverError && (
+              <div className="flex items-start gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                {serverError}
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className={[
+                'w-full py-3.5 rounded-xl font-bold text-sm text-white flex items-center justify-center gap-2 transition-all',
+                isSubmitting
+                  ? 'bg-gray-600 opacity-50 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-[#F97316] to-orange-400 hover:from-orange-500 hover:to-orange-300 shadow-lg hover:shadow-orange-500/25',
+              ].join(' ')}
+            >
+              {isSubmitting ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Signing in…</>
               ) : (
-                <><LogIn className="w-5 h-5" /> Sign In</>
+                <><LogIn className="w-4 h-4" /> Sign In</>
               )}
             </button>
           </form>
 
-          <div className="mt-6 pt-6 border-t" style={{ borderColor: isDark ? '#374151' : '#E5E7EB' }}>
-            <p className="text-xs font-semibold mb-3" style={{ color: textSub }}>🔑 Demo Credentials</p>
-            <div className="space-y-1.5">
-              {DEMO_CREDENTIALS.map((cred) => (
-                <button key={cred.role} onClick={() => { setValue('email', cred.email); setValue('password', cred.password) }}
-                  className="w-full text-left px-3 py-2 rounded-lg text-xs transition-all hover:border-orange-400 border"
-                  style={{ background: inputBg, borderColor: inputBorder, color: textSub }}>
-                  <span className="font-semibold" style={{ color: '#F97316' }}>{cred.role}:</span>{' '}
-                  {cred.email} / {cred.password}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <p className="text-center text-sm mt-6" style={{ color: textSub }}>
-            Don't have an account?{' '}
-            <Link to="/register" className="font-semibold hover:underline" style={{ color: '#F97316' }}>
+          {/* Register link */}
+          <p className="text-center text-white/40 text-sm mt-6">
+            New user?{' '}
+            <Link
+              to="/register"
+              className="text-[#F97316] hover:text-orange-300 font-semibold transition-colors"
+            >
               Register here
             </Link>
+          </p>
+        </div>
+
+        {/* Demo credentials */}
+        <div className="mt-5 rounded-xl bg-[#D4AF37]/10 border border-[#D4AF37]/20 px-5 py-4 space-y-1">
+          <div className="flex items-center gap-2 mb-2">
+            <Info className="w-4 h-4 text-[#D4AF37]" />
+            <span className="text-[#D4AF37] text-xs font-bold uppercase tracking-wide">Demo Credentials</span>
+          </div>
+          <p className="text-white/70 text-xs">
+            <span className="text-white/40 mr-2">Mobile:</span>
+            <span className="font-mono font-semibold text-white">9876543210</span>
+          </p>
+          <p className="text-white/70 text-xs">
+            <span className="text-white/40 mr-2">Password:</span>
+            <span className="font-mono font-semibold text-white">Demo@1234pass</span>
           </p>
         </div>
       </div>
