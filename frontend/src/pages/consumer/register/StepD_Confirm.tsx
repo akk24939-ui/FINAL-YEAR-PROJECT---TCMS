@@ -13,9 +13,9 @@ interface Props {
 const maskAadhaar = (num: string) => `XXXX XXXX ${num.slice(-4)}`
 
 const Row: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="flex items-start justify-between py-3 border-b border-white/10 last:border-0">
-    <span className="text-xs font-semibold text-white/50 uppercase tracking-wide">{label}</span>
-    <span className="text-sm text-white font-medium text-right max-w-[60%]">{value || '—'}</span>
+  <div className="flex items-start justify-between py-3 border-b border-gray-200 dark:border-white/10 last:border-0">
+    <span className="text-xs font-semibold text-gray-500 dark:text-white/50 uppercase tracking-wide">{label}</span>
+    <span className="text-sm text-gray-900 dark:text-white font-medium text-right max-w-[60%]">{value || '—'}</span>
   </div>
 )
 
@@ -34,7 +34,12 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
       setSuccess(true)
       onSuccess()
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      let msg = (err as any)?.response?.data?.detail
+      if (Array.isArray(msg)) {
+        msg = msg.map((m: any) => m.msg).join(', ')
+      } else if (typeof msg !== 'string') {
+        msg = null
+      }
       setError(msg ?? 'Registration failed. Please try again.')
     } finally {
       setLoading(false)
@@ -49,14 +54,14 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
           <CheckCircle className="w-10 h-10 text-emerald-400" />
         </div>
         <div>
-          <h2 className="text-2xl font-bold text-white mb-2">Account Created! 🎉</h2>
-          <p className="text-white/60 text-sm">
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Account Created! 🎉</h2>
+          <p className="text-gray-600 dark:text-white/60 text-sm">
             Welcome to Smart TASMAC. You can now sign in with your credentials.
           </p>
         </div>
         <button
           onClick={() => navigate('/login')}
-          className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-[#F97316] to-orange-400 text-white font-bold text-sm shadow-lg hover:shadow-orange-500/25 transition-all"
+          className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-[#F97316] to-orange-400 text-gray-900 dark:text-white font-bold text-sm shadow-lg hover:shadow-orange-500/25 transition-all"
         >
           <LogIn className="w-4 h-4" /> Sign In Now
         </button>
@@ -67,14 +72,14 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
   return (
     <div className="p-6 sm:p-8 space-y-6">
       <div>
-        <h2 className="text-xl font-bold text-white">Confirm & Create Account</h2>
-        <p className="text-sm text-white/60 mt-1">
+        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Confirm & Create Account</h2>
+        <p className="text-sm text-gray-600 dark:text-white/60 mt-1">
           Review your details before submitting.
         </p>
       </div>
 
       {/* Summary */}
-      <div className="bg-white/5 rounded-xl px-4 divide-y divide-white/10">
+      <div className="bg-gray-50/50 dark:bg-white/5 rounded-xl px-4 divide-y divide-white/10">
         <Row label="Full Name" value={formData.full_name} />
         <Row label="Email" value={formData.email} />
         <Row label="Mobile" value={formData.mobile_number} />
@@ -93,7 +98,7 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
           onChange={(e) => setAgreed(e.target.checked)}
           className="mt-0.5 w-4 h-4 rounded accent-orange-500 flex-shrink-0"
         />
-        <span className="text-xs text-white/60 leading-relaxed">
+        <span className="text-xs text-gray-600 dark:text-white/60 leading-relaxed">
           I confirm that the information provided is accurate. I agree to the{' '}
           <span className="text-[#F97316] underline cursor-pointer">Terms of Service</span> and{' '}
           <span className="text-[#F97316] underline cursor-pointer">Privacy Policy</span> of the
@@ -114,7 +119,7 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
         <button
           type="button"
           onClick={onBack}
-          className="flex items-center gap-2 px-5 py-3 rounded-xl border border-white/20 text-white/70 hover:text-white hover:border-white/40 text-sm font-semibold transition-colors"
+          className="flex items-center gap-2 px-5 py-3 rounded-xl border border-gray-300 dark:border-white/20 text-gray-600 dark:text-white/70 hover:text-gray-900 dark:text-white hover:border-gray-400 dark:hover:border-white/40 text-sm font-semibold transition-colors"
         >
           <ChevronLeft className="w-4 h-4" /> Back
         </button>
@@ -122,7 +127,7 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
           onClick={handleRegister}
           disabled={!agreed || loading}
           className={[
-            'flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm text-white transition-all',
+            'flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm text-gray-900 dark:text-white transition-all',
             !agreed || loading
               ? 'bg-gray-600 opacity-50 cursor-not-allowed'
               : 'bg-gradient-to-r from-[#1A3C34] to-emerald-700 hover:from-emerald-700 hover:to-emerald-600 shadow-lg',

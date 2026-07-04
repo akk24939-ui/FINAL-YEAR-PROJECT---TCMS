@@ -76,7 +76,7 @@ const Field: React.FC<FieldProps> = ({ label, error, confidence, children }) => 
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-2">
-        <label className="text-xs font-semibold text-white/70 uppercase tracking-wide">{label}</label>
+        <label className="text-xs font-semibold text-gray-600 dark:text-white/70 uppercase tracking-wide">{label}</label>
         {confidence !== undefined && <ConfidenceBadge score={confidence} />}
       </div>
       <div className={lowConf ? 'ring-1 ring-amber-400/60 rounded-lg' : ''}>{children}</div>
@@ -91,9 +91,9 @@ const Field: React.FC<FieldProps> = ({ label, error, confidence, children }) => 
 }
 
 const inputCls =
-  'w-full bg-white/5 border border-white/15 hover:border-white/30 focus:border-[#F97316] text-white placeholder-white/30 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors'
+  'w-full bg-gray-50/50 dark:bg-white/5 border border-gray-300 dark:border-white/15 hover:border-gray-400 dark:hover:border-white/30 focus:border-[#F97316] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-white/30 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors'
 const selectCls =
-  'w-full bg-[#1A3C34] border border-white/15 hover:border-white/30 focus:border-[#F97316] text-white rounded-lg px-3 py-2.5 text-sm outline-none transition-colors'
+  'w-full bg-gray-50 dark:bg-[#1A3C34] border border-gray-300 dark:border-white/15 hover:border-gray-400 dark:hover:border-white/30 focus:border-[#F97316] text-gray-900 dark:text-white rounded-lg px-3 py-2.5 text-sm outline-none transition-colors'
 
 // ─── Component ────────────────────────────────────────────────────────────────
 interface Props {
@@ -130,8 +130,8 @@ const StepB_ReviewForm: React.FC<Props> = ({ ocrData, onComplete, onBack }) => {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="p-6 sm:p-8 space-y-5">
       <div>
-        <h2 className="text-xl font-bold text-white">Review Extracted Details</h2>
-        <p className="text-sm text-white/60 mt-1">
+        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Review Extracted Details</h2>
+        <p className="text-sm text-gray-600 dark:text-white/60 mt-1">
           Fields with a confidence badge were auto-filled. Please verify highlighted fields.
         </p>
       </div>
@@ -215,13 +215,13 @@ const StepB_ReviewForm: React.FC<Props> = ({ ocrData, onComplete, onBack }) => {
         <button
           type="button"
           onClick={onBack}
-          className="flex items-center gap-2 px-5 py-3 rounded-xl border border-white/20 text-white/70 hover:text-white hover:border-white/40 text-sm font-semibold transition-colors"
+          className="flex items-center gap-2 px-5 py-3 rounded-xl border border-gray-300 dark:border-white/20 text-gray-600 dark:text-white/70 hover:text-gray-900 dark:text-white hover:border-gray-400 dark:hover:border-white/40 text-sm font-semibold transition-colors"
         >
           <ChevronLeft className="w-4 h-4" /> Back
         </button>
         <button
           type="submit"
-          className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-[#F97316] to-orange-400 hover:from-orange-500 hover:to-orange-300 text-white font-bold text-sm shadow-lg hover:shadow-orange-500/25 transition-all"
+          className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-gradient-to-r from-[#F97316] to-orange-400 hover:from-orange-500 hover:to-orange-300 text-gray-900 dark:text-white font-bold text-sm shadow-lg hover:shadow-orange-500/25 transition-all"
         >
           Continue <ChevronRight className="w-4 h-4" />
         </button>

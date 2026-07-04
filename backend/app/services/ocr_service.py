@@ -132,28 +132,46 @@ def _extract_gender(text: str) -> tuple[Optional[Gender], float]:
 
 def _extract_name(text: str) -> tuple[Optional[str], float]:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    
+    # 1. Check line immediately preceding S/O, D/O, W/O, C/O
     for i, line in enumerate(lines):
-        if "government of india" in line.lower():
-            if i + 1 < len(lines):
-                cand = lines[i + 1]
-                if len(cand) >= 3 and cand.replace(" ", "").isalpha():
-                    return cand, 80.0
-    for i, line in enumerate(lines):
-        if re.search(r"\bDOB\b|\bDate\s+of\s+Birth\b", line, re.IGNORECASE):
+        if re.search(r"^(?:S/O|D/O|W/O|C/O)[:\s]", line, re.IGNORECASE):
             if i > 0:
                 cand = lines[i - 1]
                 if len(cand) >= 3 and re.match(r"^[A-Za-z\s\.]+$", cand):
-                    return cand, 65.0
+                    return cand, 95.0
+                
+    # 2. Check line preceding DOB
+    for i, line in enumerate(lines):
+        if re.search(r"\bDOB\b|\bDate\s+of\s+Birth\b", line, re.IGNORECASE):
+            if i > 0:
+                # Look back up to 3 lines for a valid name
+                for j in range(1, min(i + 1, 4)):
+                    cand = lines[i - j]
+                    # Filter out noise like "HHTAY OB F"
+                    if len(cand) >= 3 and re.match(r"^[A-Za-z\s\.]+$", cand) and not cand.isupper():
+                        return cand, 75.0
+                        
     return None, 0.0
 
 
 def _extract_address(text: str) -> tuple[Optional[str], float]:
-    m = _RE_ADDR_START.search(text)
+    # Look for Address block ending with a 6-digit pin code
+    m = re.search(r"(?:Address|S/O|D/O|W/O|C/O)[:\s]+(.*?-\s*\d{6})", text, re.IGNORECASE | re.DOTALL)
     if m:
-        raw = text[m.end():].strip()
-        address = " ".join(raw.split()[:60])[:500]
+        raw = m.group(1).strip()
+        # Clean up newlines and extra spaces
+        address = re.sub(r"\s+", " ", raw)
+        return address, 95.0
+    
+    # Fallback: just take next 20 words
+    m2 = _RE_ADDR_START.search(text)
+    if m2:
+        raw = text[m2.end():].strip()
+        address = " ".join(raw.split()[:20])[:200]
         if len(address) > 10:
             return address, 70.0
+            
     return None, 0.0
 
 
@@ -170,7 +188,14 @@ def extract_from_image(image_bytes: bytes) -> RegisterExtractResponse:
         return _mock_response()
 
     try:
-        img = Image.open(io.BytesIO(image_bytes))
+        if image_bytes.startswith(b"%PDF"):
+            import fitz
+            doc = fitz.open(stream=image_bytes, filetype="pdf")
+            page = doc.load_page(0)
+            pix = page.get_pixmap(dpi=300)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        else:
+            img = Image.open(io.BytesIO(image_bytes))
         # 1. Grayscale
         if img.mode != "L":
             img = img.convert("L")
@@ -191,7 +216,13 @@ def extract_from_image(image_bytes: bytes) -> RegisterExtractResponse:
         # DEBUG: Log the raw text to a file so we can read it
         with open(r"C:\Users\akk24\.gemini\antigravity\brain\ea07455a-17fb-41da-a1af-6c43e224a643\scratch\raw_ocr.txt", "w", encoding="utf-8") as f:
             f.write(text)
-    except Exception:
+    except Exception as e:
+        # DEBUG: Log the exception to a file so we can see why it's failing
+        import os
+        log_path = r"C:\Users\akk24\.gemini\antigravity\brain\ea07455a-17fb-41da-a1af-6c43e224a643\scratch\ocr_error.log"
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "w") as f:
+            f.write(str(e))
         # Tesseract binary not found or image decode error → mock
         return _mock_response()
 

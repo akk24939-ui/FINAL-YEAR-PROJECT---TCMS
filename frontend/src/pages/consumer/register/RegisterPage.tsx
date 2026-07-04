@@ -36,17 +36,17 @@ const RegisterPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0D1F1A] via-[#1A3C34] to-[#0D2B22] dark:from-[#0D1F1A] dark:to-[#0a1a14] flex flex-col">
+    <div className="min-h-screen bg-gray-50 dark:bg-gradient-to-br dark:from-[#0D1F1A] dark:via-[#1A3C34] dark:to-[#0D2B22] flex flex-col transition-colors duration-300">
       {/* Header */}
-      <header className="w-full px-6 py-4 flex items-center justify-between border-b border-white/10">
+      <header className="w-full px-6 py-4 flex items-center justify-between border-b border-gray-200 dark:border-white/10 bg-white dark:bg-transparent transition-colors duration-300">
         <button
           onClick={() => navigate('/')}
-          className="flex items-center gap-2 text-white/80 hover:text-white transition-colors"
+          className="flex items-center gap-2 text-gray-700 dark:text-white/80 hover:text-gray-900 dark:hover:text-white transition-colors"
         >
           <span className="text-2xl">🏛️</span>
           <span className="font-bold text-lg tracking-tight hidden sm:block">Smart TASMAC</span>
         </button>
-        <span className="text-[#D4AF37] text-sm font-medium">Consumer Registration</span>
+        <span className="text-emerald-700 dark:text-[#D4AF37] text-sm font-semibold">Consumer Registration</span>
       </header>
 
       <main className="flex-1 flex flex-col items-center justify-start px-4 py-8">
@@ -55,7 +55,7 @@ const RegisterPage: React.FC = () => {
           <StepperNav steps={STEPS} currentStep={currentStep} />
 
           {/* Step card */}
-          <div className="mt-4 rounded-2xl bg-white/5 dark:bg-white/5 backdrop-blur-md border border-white/10 shadow-2xl overflow-hidden">
+          <div className="mt-4 rounded-2xl bg-white dark:bg-white/5 backdrop-blur-md border border-gray-200 dark:border-white/10 shadow-xl dark:shadow-2xl overflow-hidden transition-colors duration-300">
             {currentStep === 1 && (
               <StepA_Upload onComplete={handleStepAComplete} />
             )}
@@ -83,7 +83,7 @@ const RegisterPage: React.FC = () => {
 
           {/* Already have account */}
           {currentStep < 4 && (
-            <p className="text-center text-white/50 text-sm mt-6">
+            <p className="text-center text-gray-600 dark:text-white/50 text-sm mt-6">
               Already have an account?{' '}
               <button
                 onClick={() => navigate('/login')}

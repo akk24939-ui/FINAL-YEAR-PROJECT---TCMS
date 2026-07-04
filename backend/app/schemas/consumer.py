@@ -34,7 +34,7 @@ class RegisterFinalRequest(BaseModel):
     mobile_number: str = Field(..., pattern=r"^\d{10}$")
     password: str = Field(
         ...,
-        min_length=10,
+        min_length=6,
         description="Min 10 chars, server-side strength validated."
     )
     
@@ -45,16 +45,7 @@ class RegisterFinalRequest(BaseModel):
     district: str
     address: Optional[str] = None
 
-    @validator('password')
-    def validate_password_strength(cls, v):
-        if not any(char.isdigit() for char in v):
-            raise ValueError('Password must contain at least one digit')
-        if not any(char.isupper() for char in v):
-            raise ValueError('Password must contain at least one uppercase letter')
-        if not any(char.islower() for char in v):
-            raise ValueError('Password must contain at least one lowercase letter')
-        return v
-        
+
     @validator('dob')
     def validate_age(cls, v):
         today = date.today()

@@ -60,7 +60,12 @@ const StepA_Upload: React.FC<Props> = ({ onComplete }) => {
       const result = await consumerApi.extractId(fd)
       onComplete(result.data)
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      let msg = (err as any)?.response?.data?.detail
+      if (Array.isArray(msg)) {
+        msg = msg.map((m: any) => m.msg).join(', ')
+      } else if (typeof msg !== 'string') {
+        msg = null
+      }
       setError(msg ?? 'Failed to extract data. Please try again with a clearer image.')
     } finally {
       setLoading(false)
@@ -70,8 +75,8 @@ const StepA_Upload: React.FC<Props> = ({ onComplete }) => {
   return (
     <div className="p-6 sm:p-8 space-y-6">
       <div>
-        <h2 className="text-xl font-bold text-white">Upload Identity Document</h2>
-        <p className="text-sm text-white/60 mt-1">
+        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Upload Identity Document</h2>
+        <p className="text-sm text-gray-600 dark:text-white/60 mt-1">
           We'll extract your details automatically. You can review and correct them in the next step.
         </p>
       </div>
@@ -99,7 +104,7 @@ const StepA_Upload: React.FC<Props> = ({ onComplete }) => {
             ? 'border-[#F97316] bg-orange-500/10'
             : file
             ? 'border-emerald-500/50 bg-emerald-500/5 cursor-default'
-            : 'border-white/20 bg-white/5 hover:border-white/40 hover:bg-white/10',
+            : 'border-gray-300 dark:border-white/20 bg-gray-50/50 dark:bg-white/5 hover:border-gray-400 dark:hover:border-white/40 hover:bg-gray-100 dark:bg-white/10',
         ].join(' ')}
       >
         <input
@@ -116,23 +121,23 @@ const StepA_Upload: React.FC<Props> = ({ onComplete }) => {
               <img
                 src={preview}
                 alt="Preview"
-                className="w-20 h-20 object-cover rounded-xl border border-white/20"
+                className="w-20 h-20 object-cover rounded-xl border border-gray-300 dark:border-white/20"
               />
             ) : (
-              <div className="w-20 h-20 rounded-xl bg-white/10 flex items-center justify-center">
-                <FileImage className="w-8 h-8 text-white/50" />
+              <div className="w-20 h-20 rounded-xl bg-gray-100 dark:bg-white/10 flex items-center justify-center">
+                <FileImage className="w-8 h-8 text-gray-500 dark:text-white/50" />
               </div>
             )}
             <div className="flex-1 min-w-0">
-              <p className="text-white font-semibold truncate">{file.name}</p>
-              <p className="text-white/50 text-sm">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+              <p className="text-gray-900 dark:text-white font-semibold truncate">{file.name}</p>
+              <p className="text-gray-500 dark:text-white/50 text-sm">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
               <span className="inline-block mt-1 text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-medium">
                 Ready to upload
               </span>
             </div>
             <button
               onClick={(e) => { e.stopPropagation(); setFile(null); setPreview(null) }}
-              className="p-2 rounded-full hover:bg-white/10 text-white/50 hover:text-white transition-colors"
+              className="p-2 rounded-full hover:bg-gray-100 dark:bg-white/10 text-gray-500 dark:text-white/50 hover:text-gray-900 dark:text-white transition-colors"
               aria-label="Remove file"
             >
               <X className="w-4 h-4" />
@@ -140,12 +145,12 @@ const StepA_Upload: React.FC<Props> = ({ onComplete }) => {
           </div>
         ) : (
           <div className="p-10 flex flex-col items-center gap-3 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-white/10 flex items-center justify-center">
-              <Upload className="w-8 h-8 text-white/50" />
+            <div className="w-16 h-16 rounded-2xl bg-gray-100 dark:bg-white/10 flex items-center justify-center">
+              <Upload className="w-8 h-8 text-gray-500 dark:text-white/50" />
             </div>
             <div>
-              <p className="text-white font-semibold">Drag & drop or click to upload</p>
-              <p className="text-white/40 text-sm mt-1">Supported: JPG, PNG, PDF — max {MAX_SIZE_MB} MB</p>
+              <p className="text-gray-900 dark:text-white font-semibold">Drag & drop or click to upload</p>
+              <p className="text-gray-400 dark:text-white/40 text-sm mt-1">Supported: JPG, PNG, PDF — max {MAX_SIZE_MB} MB</p>
             </div>
           </div>
         )}
@@ -164,7 +169,7 @@ const StepA_Upload: React.FC<Props> = ({ onComplete }) => {
         onClick={handleSubmit}
         disabled={!file || loading}
         className={[
-          'w-full py-3.5 rounded-xl font-bold text-white text-sm transition-all duration-200 flex items-center justify-center gap-2',
+          'w-full py-3.5 rounded-xl font-bold text-gray-900 dark:text-white text-sm transition-all duration-200 flex items-center justify-center gap-2',
           !file || loading
             ? 'bg-gray-600 cursor-not-allowed opacity-50'
             : 'bg-gradient-to-r from-[#F97316] to-orange-400 hover:from-orange-500 hover:to-orange-300 shadow-lg hover:shadow-orange-500/25',
