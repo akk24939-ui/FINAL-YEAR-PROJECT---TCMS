@@ -1,8 +1,17 @@
 import apiClient from './client'
 import type {
-  ConsumerProfile, SelfRestrictionData, PaginatedPurchases,
-  QrResponse, NotificationItem, OcrExtractResponse,
-  RegisterFinalRequest, LimitUpdateRequest, LockRequest
+  ConsumerProfile,
+  ProfileUpdateRequest,
+  ConsumerLimitsResponse,
+  ConsumerLimitsUpdateRequest,
+  SelfRestrictionData,
+  DashboardResponse,
+  PaginatedPurchases,
+  QrResponse,
+  NotificationItem,
+  OcrExtractResponse,
+  RegisterFinalRequest,
+  LockRequest,
 } from '../types/consumer.types'
 
 export const consumerApi = {
@@ -15,26 +24,35 @@ export const consumerApi = {
   register: (data: RegisterFinalRequest) =>
     apiClient.post<{ message: string; user_id: string }>('/api/v1/consumer/register', data),
 
-  // ── Profile ─────────────────────────────────────────────────────────────────
-  getProfile: () => apiClient.get<ConsumerProfile>('/api/v1/consumer/profile'),
+  // ── Dashboard ────────────────────────────────────────────────────────────────
+  getDashboard: () =>
+    apiClient.get<DashboardResponse>('/api/v1/consumer/dashboard'),
 
-  updateProfile: (data: Partial<ConsumerProfile>) =>
+  // ── Profile ─────────────────────────────────────────────────────────────────
+  getProfile: () =>
+    apiClient.get<ConsumerProfile>('/api/v1/consumer/profile'),
+
+  updateProfile: (data: ProfileUpdateRequest) =>
     apiClient.put<ConsumerProfile>('/api/v1/consumer/profile', data),
 
   uploadPhoto: (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
-    return apiClient.post<{ photo_path: string }>('/api/v1/consumer/profile/photo', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    return apiClient.post<{ message: string; path: string }>(
+      '/api/v1/consumer/profile/photo',
+      fd,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
   },
 
-  // ── Limits ──────────────────────────────────────────────────────────────────
-  getLimits: () => apiClient.get<SelfRestrictionData>('/api/v1/consumer/limits'),
+  // ── Limits (new ConsumerLimits table) ────────────────────────────────────────
+  getLimits: () =>
+    apiClient.get<ConsumerLimitsResponse>('/api/v1/consumer/limits'),
 
-  updateLimits: (data: LimitUpdateRequest) =>
-    apiClient.put<SelfRestrictionData>('/api/v1/consumer/limits', data),
+  updateLimits: (data: ConsumerLimitsUpdateRequest) =>
+    apiClient.put<ConsumerLimitsResponse>('/api/v1/consumer/limits', data),
 
+  // ── Self-Restriction (lock/unlock — SelfRestriction table) ───────────────────
   lockLimits: (data: LockRequest) =>
     apiClient.post<SelfRestrictionData>('/api/v1/consumer/limits/lock', data),
 
@@ -50,12 +68,13 @@ export const consumerApi = {
 
   // ── Purchases ───────────────────────────────────────────────────────────────
   getPurchases: (params?: {
-    skip?: number; limit?: number;
+    skip?: number; limit?: number
     start_date?: string; end_date?: string; product_name?: string
   }) => apiClient.get<PaginatedPurchases>('/api/v1/consumer/purchases', { params }),
 
   // ── QR ──────────────────────────────────────────────────────────────────────
-  generateQr: () => apiClient.get<QrResponse>('/api/v1/consumer/qr'),
+  generateQr: () =>
+    apiClient.get<QrResponse>('/api/v1/consumer/qr'),
 
   // ── PDF ─────────────────────────────────────────────────────────────────────
   downloadPdf: (startDate: string, endDate: string) =>
@@ -73,4 +92,7 @@ export const consumerApi = {
 
   markNotificationRead: (id: string) =>
     apiClient.patch<NotificationItem>(`/api/v1/consumer/notifications/${id}/read`),
+
+  markAllRead: () =>
+    apiClient.post('/api/v1/consumer/notifications/mark-all-read'),
 }

@@ -23,10 +23,8 @@ from app.models.notification import (
 )
 from app.models.restriction import SelfRestriction
 from app.models.user import User
-from app.schemas.consumer import (
-    ConsumerProfileResponse,
-    SelfRestrictionResponse,
-)
+from app.schemas.consumer import ConsumerProfileResponse, SelfRestrictionResponse
+from app.schemas.dashboard import ProfileResponse, ProfileUpdateRequest
 from app.services.image_service import strip_exif_and_reencode
 
 
@@ -77,12 +75,53 @@ def _fetch_restriction(user: User, db: Session) -> Optional[SelfRestriction]:
     )
 
 
+def _build_profile_response(
+    user: User,
+    profile: ConsumerProfile,
+    restriction: Optional[SelfRestriction],
+    raw_aadhaar: str,
+) -> ProfileResponse:
+    """Build the new full ProfileResponse (used by profile endpoints)."""
+    is_locked = False
+    locked_until = None
+    if restriction and restriction.is_locked:
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        if restriction.locked_until is None or restriction.locked_until > now:
+            is_locked = True
+            locked_until = restriction.locked_until
+
+    return ProfileResponse(
+        id=profile.id,
+        user_id=user.id,
+        full_name=user.full_name,
+        email=user.email,
+        mobile_number=user.mobile_number,
+        aadhaar_masked=mask_aadhaar(raw_aadhaar),
+        dob=profile.dob,
+        gender=profile.gender,
+        district=profile.district,
+        address=profile.address,
+        blood_group=profile.blood_group,
+        emergency_contact_name=profile.emergency_contact_name,
+        emergency_contact_phone=profile.emergency_contact_phone,
+        photo_path=profile.photo_path,
+        beverage_preference=profile.beverage_preference,
+        is_teetotaler=profile.is_teetotaler,
+        teetotaler_set_at=profile.teetotaler_set_at,
+        member_since=user.created_at,
+        is_self_restricted=is_locked,
+        restriction_locked_until=locked_until,
+    )
+
+
 def _build_response(
     user: User,
     profile: ConsumerProfile,
     restriction: Optional[SelfRestriction],
     raw_aadhaar: str,
 ) -> ConsumerProfileResponse:
+    """Build the legacy ConsumerProfileResponse (used by register flow)."""
     restriction_resp = None
     if restriction:
         restriction_resp = SelfRestrictionResponse(
@@ -120,19 +159,74 @@ def _build_response(
 # ── Public service functions ───────────────────────────────────────────────────
 
 def get_profile(user: User, db: Session) -> ConsumerProfileResponse:
-    """Return the consumer's profile with masked Aadhaar.
-
-    Ownership enforced by *user* coming exclusively from JWT `sub` claim.
-    """
+    """Return the consumer's profile with masked Aadhaar (legacy schema)."""
     profile = _fetch_profile(user, db)
     restriction = _fetch_restriction(user, db)
-
     raw_aadhaar = (
         decrypt_aadhaar(profile.aadhaar_encrypted)
         if profile.aadhaar_encrypted
         else "000000000000"
     )
     return _build_response(user, profile, restriction, raw_aadhaar)
+
+
+def get_full_profile(user: User, db: Session) -> "ProfileResponse":
+    """Return the full profile with all new fields (dashboard module schema)."""
+    profile = _fetch_profile(user, db)
+    restriction = _fetch_restriction(user, db)
+    raw_aadhaar = (
+        decrypt_aadhaar(profile.aadhaar_encrypted)
+        if profile.aadhaar_encrypted
+        else "000000000000"
+    )
+    return _build_profile_response(user, profile, restriction, raw_aadhaar)
+
+
+def update_full_profile(
+    user: User, data: "ProfileUpdateRequest", db: Session
+) -> "ProfileResponse":
+    """Update all editable profile fields including new dashboard fields."""
+    profile = _fetch_profile(user, db)
+
+    # Profile-level fields
+    profile_fields = {
+        "gender", "district", "address",
+        "blood_group", "emergency_contact_name", "emergency_contact_phone",
+        "beverage_preference",
+    }
+    updated: dict = {}
+    for field in profile_fields:
+        value = getattr(data, field, None)
+        if value is not None:
+            setattr(profile, field, value)
+            updated[field] = str(value)
+
+    # User-level fields (full_name, mobile_number)
+    if data.full_name is not None:
+        user.full_name = data.full_name
+        updated["full_name"] = data.full_name
+    if data.mobile_number is not None:
+        user.mobile_number = data.mobile_number
+        updated["mobile_number"] = data.mobile_number
+
+    _write_audit(
+        db,
+        AuditEventType.PROFILE_UPDATED,
+        user_id=user.id,
+        description="Consumer profile updated (dashboard module)",
+        metadata_json={"updated_fields": list(updated.keys())},
+    )
+    db.commit()
+    db.refresh(profile)
+    db.refresh(user)
+
+    restriction = _fetch_restriction(user, db)
+    raw_aadhaar = (
+        decrypt_aadhaar(profile.aadhaar_encrypted)
+        if profile.aadhaar_encrypted
+        else "000000000000"
+    )
+    return _build_profile_response(user, profile, restriction, raw_aadhaar)
 
 
 def update_profile(user: User, data: dict, db: Session) -> ConsumerProfileResponse:

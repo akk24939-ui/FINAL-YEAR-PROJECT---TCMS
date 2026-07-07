@@ -59,6 +59,7 @@ const config: Config = {
         'pulse-glow': 'pulseGlow 2s ease-in-out infinite',
         'shimmer': 'shimmer 2s linear infinite',
         'underline-grow': 'underlineGrow 1s ease-out forwards',
+        'slide-in-left': 'slideInLeft 0.25s ease-out forwards',
       },
       keyframes: {
         scrollX: {
@@ -80,6 +81,10 @@ const config: Config = {
         underlineGrow: {
           '0%': { width: '0%' },
           '100%': { width: '100%' },
+        },
+        slideInLeft: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(0)' },
         },
       },
     },

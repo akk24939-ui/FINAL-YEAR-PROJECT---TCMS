@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.consumer import (
+    dashboard,
     limits,
     notifications,
     pdf,
@@ -20,6 +21,7 @@ router = APIRouter(tags=["Consumer"])
 router.include_router(register.router)
 
 # Authenticated consumer sub-routers
+router.include_router(dashboard.router)
 router.include_router(profile.router)
 router.include_router(limits.router)
 router.include_router(teetotaler.router)

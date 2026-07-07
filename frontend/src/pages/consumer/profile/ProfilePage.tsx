@@ -1,11 +1,36 @@
-import React, { useState, useRef } from 'react'
-import { User, Mail, Phone, MapPin, Calendar, Shield, Camera, Edit3, Save, X, Loader2 } from 'lucide-react'
-import { useConsumerProfile, PROFILE_QUERY_KEY } from '../../../hooks/useConsumerProfile'
+/**
+ * ProfilePage.tsx — Full consumer profile view + edit.
+ *
+ * View mode: Displays all profile fields in grouped info rows.
+ * Edit mode: Form with all editable fields including new dashboard fields.
+ *
+ * New fields (dashboard module):
+ *   blood_group, emergency_contact_name, emergency_contact_phone
+ * Updated: full_name and mobile_number are now editable.
+ */
+import React, { useState, useRef, useEffect } from 'react'
+import {
+  User, Mail, Phone, MapPin, Calendar, Shield,
+  Camera, Edit3, Save, X, Loader2, AlertCircle,
+  Heart, UserCheck, RefreshCw,
+} from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useConsumerProfile, PROFILE_QUERY_KEY } from '../../../hooks/useConsumerProfile'
 import { consumerApi } from '../../../api/consumer.api'
-import type { BeveragePreference, ConsumerProfile } from '../../../types/consumer.types'
+import type {
+  Gender, BeveragePreference, ConsumerProfile, ProfileUpdateRequest
+} from '../../../types/consumer.types'
 
-type UpdateProfileRequest = Partial<Pick<ConsumerProfile, 'district' | 'gender' | 'address' | 'beverage_preference' | 'mobile_number'>>
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const GENDER_OPTIONS: { value: Gender; label: string }[] = [
+  { value: 'MALE', label: 'Male' },
+  { value: 'FEMALE', label: 'Female' },
+  { value: 'OTHER', label: 'Other' },
+  { value: 'PREFER_NOT_TO_SAY', label: 'Prefer not to say' },
+]
+
+const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-', 'Unknown']
 
 const BEVERAGE_OPTIONS: { value: BeveragePreference; label: string }[] = [
   { value: 'BEER', label: '🍺 Beer' },
@@ -15,107 +40,169 @@ const BEVERAGE_OPTIONS: { value: BeveragePreference; label: string }[] = [
   { value: 'NONE', label: '❌ None' },
 ]
 
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const inputCls =
-  'w-full bg-white/5 border border-white/15 hover:border-white/30 focus:border-[#F97316] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-white/30 rounded-lg px-3 py-2.5 text-sm outline-none transition-colors'
+  'w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 transition'
+
+const selectCls =
+  'w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 transition'
+
+// ── Info row (view mode) ──────────────────────────────────────────────────────
+
+const InfoRow: React.FC<{
+  icon: React.ReactNode
+  label: string
+  value: React.ReactNode
+}> = ({ icon, label, value }) => (
+  <div className="flex items-start gap-4 px-5 py-3.5 hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors">
+    <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-500 dark:text-gray-400 flex-shrink-0 mt-0.5">
+      {icon}
+    </div>
+    <div className="flex-1 min-w-0">
+      <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">{label}</p>
+      <p className="text-sm font-medium text-gray-800 dark:text-gray-200 mt-0.5">{value || '—'}</p>
+    </div>
+  </div>
+)
+
+// ── Form field ────────────────────────────────────────────────────────────────
+
+const FormField: React.FC<{
+  label: string
+  children: React.ReactNode
+}> = ({ label, children }) => (
+  <div className="space-y-1.5">
+    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide block">
+      {label}
+    </label>
+    {children}
+  </div>
+)
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 const ProfilePage: React.FC = () => {
-  const { profile, isLoading, error } = useConsumerProfile()
+  const { profile, isLoading, error, refetch } = useConsumerProfile()
   const [editing, setEditing] = useState(false)
-  const [form, setForm] = useState<UpdateProfileRequest>({})
+  const [form, setForm] = useState<ProfileUpdateRequest>({})
   const [photoLoading, setPhotoLoading] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const photoInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
 
+  // Sync form when profile loads
+  useEffect(() => {
+    if (profile && editing) {
+      setForm({
+        full_name: profile.full_name,
+        mobile_number: profile.mobile_number ?? '',
+        gender: profile.gender,
+        district: profile.district ?? '',
+        address: profile.address ?? '',
+        blood_group: profile.blood_group ?? '',
+        emergency_contact_name: profile.emergency_contact_name ?? '',
+        emergency_contact_phone: profile.emergency_contact_phone ?? '',
+        beverage_preference: profile.beverage_preference,
+      })
+    }
+  }, [editing, profile])
+
   const { mutate: updateProfile, isPending: saving } = useMutation({
-    mutationFn: (data: UpdateProfileRequest) => consumerApi.updateProfile(data).then(r => r.data),
+    mutationFn: (data: ProfileUpdateRequest) =>
+      consumerApi.updateProfile(data).then(r => r.data),
     onSuccess: (updated) => {
       queryClient.setQueryData<ConsumerProfile>(PROFILE_QUERY_KEY, updated)
       setEditing(false)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 4000)
+    },
+    onError: (err: Error) => {
+      setSaveError(err.message || 'Failed to save. Please try again.')
     },
   })
-
-  const handlePhotoClick = () => photoInputRef.current?.click()
 
   const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     setPhotoLoading(true)
     try {
-      const res = await consumerApi.uploadPhoto(file)
-      const photo_path = res.data.photo_path
-      queryClient.setQueryData<ConsumerProfile>(PROFILE_QUERY_KEY, (old) =>
-        old ? { ...old, photo_path } : old
-      )
+      await consumerApi.uploadPhoto(file)
+      refetch()
     } catch {
-      // Silent
+      // Silent — photo upload failures are non-critical
     } finally {
       setPhotoLoading(false)
     }
   }
 
-  const startEdit = () => {
-    if (!profile) return
-    setForm({
-      district: profile.district ?? '',
-      address: profile.address ?? '',
-      beverage_preference: profile.beverage_preference,
-      mobile_number: profile.mobile_number ?? '',
-    })
-    setEditing(true)
-  }
-
+  const startEdit = () => setEditing(true)
   const cancelEdit = () => {
     setEditing(false)
     setForm({})
+    setSaveError('')
   }
 
+  // ── Loading ──────────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 text-[#F97316] animate-spin" />
+      <div className="max-w-2xl mx-auto space-y-4 animate-pulse">
+        <div className="h-40 bg-gray-200 dark:bg-gray-800 rounded-2xl" />
+        <div className="h-64 bg-gray-200 dark:bg-gray-800 rounded-2xl" />
       </div>
     )
   }
 
   if (error || !profile) {
     return (
-      <div className="flex flex-col items-center gap-3 h-64 justify-center text-center">
-        <p className="text-red-400 font-semibold">Failed to load profile.</p>
-        <p className="text-gray-400 text-sm">Please refresh the page.</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <AlertCircle className="w-12 h-12 text-red-400" />
+        <p className="font-semibold text-gray-900 dark:text-gray-100">Failed to load profile</p>
+        <button
+          onClick={() => refetch()}
+          className="flex items-center gap-2 bg-blue-600 text-white rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-blue-700 transition"
+        >
+          <RefreshCw className="w-4 h-4" /> Retry
+        </button>
       </div>
     )
   }
 
   const initials = profile.full_name
     .split(' ')
-    .map((w) => w[0])
+    .map(w => w[0])
     .join('')
     .toUpperCase()
     .slice(0, 2)
 
+  const formatDate = (iso?: string) =>
+    iso ? new Date(iso).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
+
   return (
-    <div className="max-w-2xl mx-auto space-y-6 p-4 sm:p-6">
-      {/* Header card */}
-      <div className="rounded-2xl bg-gradient-to-br from-[#1A3C34] to-[#0D2B22] border border-white/10 p-6">
+    <div className="max-w-2xl mx-auto space-y-5">
+
+      {/* ── Header Card ── */}
+      <div className="rounded-2xl bg-gradient-to-br from-blue-700 to-blue-900 dark:from-blue-800 dark:to-blue-950 p-6 shadow-lg">
         <div className="flex items-start gap-5">
+
           {/* Avatar */}
           <div className="relative flex-shrink-0">
             <div
-              className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-[#D4AF37]/40 bg-[#1A3C34] flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={handlePhotoClick}
+              className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-white/20 bg-blue-800 flex items-center justify-center cursor-pointer hover:opacity-80 transition"
+              onClick={() => photoInputRef.current?.click()}
               title="Click to change photo"
             >
               {profile.photo_path ? (
-                <img
-                  src={profile.photo_path}
-                  alt={profile.full_name}
-                  className="w-full h-full object-cover"
-                />
+                <img src={profile.photo_path} alt={profile.full_name} className="w-full h-full object-cover" />
               ) : (
-                <span className="text-2xl font-black text-[#D4AF37]">{initials}</span>
+                <span className="text-2xl font-black text-white/90">{initials}</span>
               )}
             </div>
-            <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-[#F97316] flex items-center justify-center border-2 border-[#0D2B22] cursor-pointer" onClick={handlePhotoClick}>
+            <div
+              className="absolute -bottom-1.5 -right-1.5 w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center border-2 border-blue-900 cursor-pointer hover:bg-blue-400 transition"
+              onClick={() => photoInputRef.current?.click()}
+            >
               {photoLoading
                 ? <Loader2 className="w-3 h-3 text-white animate-spin" />
                 : <Camera className="w-3 h-3 text-white" />
@@ -124,144 +211,254 @@ const ProfilePage: React.FC = () => {
             <input
               ref={photoInputRef}
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png"
               className="hidden"
               onChange={handlePhotoChange}
             />
           </div>
 
-          {/* Name + badges */}
+          {/* Info */}
           <div className="flex-1 min-w-0">
             <h2 className="text-xl font-bold text-white truncate">{profile.full_name}</h2>
-            <p className="text-white/50 text-sm mt-0.5">{profile.email}</p>
+            <p className="text-blue-200/70 text-sm mt-0.5">{profile.email}</p>
             <div className="flex flex-wrap gap-2 mt-3">
-              <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${profile.is_teetotaler ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`}>
-                {profile.is_teetotaler ? '🚫 Teetotaler Active' : '✅ Active Consumer'}
+              <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                profile.is_teetotaler
+                  ? 'bg-red-500/20 text-red-300 border border-red-400/30'
+                  : 'bg-green-500/20 text-green-300 border border-green-400/30'
+              }`}>
+                {profile.is_teetotaler ? '🚫 Teetotaler' : '✅ Active Consumer'}
               </span>
-              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-[#D4AF37]/10 text-[#D4AF37] border border-[#D4AF37]/20">
-                ID: {profile.aadhaar_masked}
+              {profile.is_self_restricted && (
+                <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/30">
+                  🔒 Self-Restricted
+                </span>
+              )}
+              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-white/10 text-white/70 border border-white/20 font-mono">
+                {profile.aadhaar_masked}
               </span>
             </div>
+            {profile.member_since && (
+              <p className="text-blue-200/50 text-xs mt-2">
+                Member since {formatDate(profile.member_since)}
+              </p>
+            )}
           </div>
 
           {/* Edit toggle */}
           <button
             onClick={editing ? cancelEdit : startEdit}
-            className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-xl border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-colors"
+            className="flex-shrink-0 flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-xl border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition"
           >
             {editing ? <><X className="w-3.5 h-3.5" /> Cancel</> : <><Edit3 className="w-3.5 h-3.5" /> Edit</>}
           </button>
         </div>
       </div>
 
-      {/* Info card */}
-      <div className="rounded-2xl bg-white dark:bg-[#0D2B22] border border-gray-100 dark:border-white/10 shadow-sm divide-y divide-gray-100 dark:divide-white/10">
-        {editing ? (
-          <div className="p-5 space-y-4">
-            <h3 className="text-sm font-bold text-gray-800 dark:text-white uppercase tracking-wide">Edit Profile</h3>
+      {/* ── Success banner ── */}
+      {saved && (
+        <div className="flex items-center gap-2 text-green-700 dark:text-green-300 text-sm bg-green-50 dark:bg-green-900/10 px-4 py-3 rounded-2xl border border-green-200 dark:border-green-800">
+          <Save className="w-4 h-4 flex-shrink-0" /> Profile saved successfully!
+        </div>
+      )}
 
-            {/* Mobile */}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-500 dark:text-white/50 uppercase tracking-wide">Mobile Number</label>
-              <input
-                className={inputCls}
-                value={form.mobile_number ?? ''}
-                onChange={(e) => setForm({ ...form, mobile_number: e.target.value })}
-                placeholder="10-digit mobile number"
-                inputMode="numeric"
-                maxLength={10}
-              />
+      {/* ── View mode ── */}
+      {!editing && (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800 overflow-hidden shadow-sm">
+
+          {/* Personal */}
+          <div className="px-5 py-3 bg-gray-50/50 dark:bg-gray-800/30">
+            <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Personal</p>
+          </div>
+          <InfoRow icon={<User className="w-4 h-4" />} label="Full Name" value={profile.full_name} />
+          <InfoRow icon={<Mail className="w-4 h-4" />} label="Email" value={profile.email} />
+          <InfoRow icon={<Phone className="w-4 h-4" />} label="Mobile" value={profile.mobile_number ?? '—'} />
+          <InfoRow icon={<Calendar className="w-4 h-4" />} label="Date of Birth" value={profile.dob ? formatDate(profile.dob) : '—'} />
+          <InfoRow icon={<User className="w-4 h-4" />} label="Gender" value={GENDER_OPTIONS.find(g => g.value === profile.gender)?.label ?? profile.gender ?? '—'} />
+          <InfoRow icon={<Shield className="w-4 h-4" />} label="Aadhaar" value={profile.aadhaar_masked} />
+
+          {/* Location */}
+          <div className="px-5 py-3 bg-gray-50/50 dark:bg-gray-800/30">
+            <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Location</p>
+          </div>
+          <InfoRow icon={<MapPin className="w-4 h-4" />} label="District" value={profile.district ?? '—'} />
+          <InfoRow icon={<MapPin className="w-4 h-4" />} label="Address" value={profile.address ?? '—'} />
+
+          {/* Health */}
+          <div className="px-5 py-3 bg-gray-50/50 dark:bg-gray-800/30">
+            <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Health &amp; Emergency</p>
+          </div>
+          <InfoRow icon={<Heart className="w-4 h-4" />} label="Blood Group" value={profile.blood_group ?? '—'} />
+          <InfoRow icon={<UserCheck className="w-4 h-4" />} label="Emergency Contact" value={profile.emergency_contact_name ?? '—'} />
+          <InfoRow icon={<Phone className="w-4 h-4" />} label="Emergency Phone" value={profile.emergency_contact_phone ?? '—'} />
+
+          {/* Preferences */}
+          <div className="px-5 py-3 bg-gray-50/50 dark:bg-gray-800/30">
+            <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Preferences</p>
+          </div>
+          <InfoRow
+            icon={<span className="text-base">🍺</span>}
+            label="Beverage Preference"
+            value={BEVERAGE_OPTIONS.find(o => o.value === profile.beverage_preference)?.label ?? profile.beverage_preference}
+          />
+        </div>
+      )}
+
+      {/* ── Edit mode ── */}
+      {editing && (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5 space-y-5 shadow-sm">
+
+          {/* Section: Personal */}
+          <div>
+            <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-4">Personal</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <FormField label="Full Name">
+                <input
+                  className={inputCls}
+                  value={form.full_name ?? ''}
+                  onChange={e => setForm({ ...form, full_name: e.target.value })}
+                  placeholder="Your full name"
+                />
+              </FormField>
+              <FormField label="Mobile Number">
+                <input
+                  className={inputCls}
+                  value={form.mobile_number ?? ''}
+                  onChange={e => setForm({ ...form, mobile_number: e.target.value })}
+                  placeholder="10-digit mobile"
+                  inputMode="numeric"
+                  maxLength={10}
+                />
+              </FormField>
+              <FormField label="Gender">
+                <select
+                  className={selectCls}
+                  value={form.gender ?? ''}
+                  onChange={e => setForm({ ...form, gender: e.target.value as Gender })}
+                >
+                  <option value="">Select gender</option>
+                  {GENDER_OPTIONS.map(g => (
+                    <option key={g.value} value={g.value}>{g.label}</option>
+                  ))}
+                </select>
+              </FormField>
+              <FormField label="Blood Group">
+                <select
+                  className={selectCls}
+                  value={form.blood_group ?? ''}
+                  onChange={e => setForm({ ...form, blood_group: e.target.value })}
+                >
+                  <option value="">Select blood group</option>
+                  {BLOOD_GROUPS.map(bg => <option key={bg} value={bg}>{bg}</option>)}
+                </select>
+              </FormField>
             </div>
+          </div>
 
-            {/* District */}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-500 dark:text-white/50 uppercase tracking-wide">District</label>
-              <input
-                className={inputCls}
-                value={form.district ?? ''}
-                onChange={(e) => setForm({ ...form, district: e.target.value })}
-                placeholder="Your district"
-              />
+          <div className="h-px bg-gray-100 dark:bg-gray-800" />
+
+          {/* Section: Location */}
+          <div>
+            <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-4">Location</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <FormField label="District">
+                <input
+                  className={inputCls}
+                  value={form.district ?? ''}
+                  onChange={e => setForm({ ...form, district: e.target.value })}
+                  placeholder="Your district"
+                />
+              </FormField>
             </div>
-
-            {/* Address */}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-500 dark:text-white/50 uppercase tracking-wide">Address</label>
-              <textarea
-                className={`${inputCls} resize-none`}
-                value={form.address ?? ''}
-                onChange={(e) => setForm({ ...form, address: e.target.value })}
-                rows={2}
-                placeholder="Your address"
-              />
+            <div className="mt-4">
+              <FormField label="Address">
+                <textarea
+                  className={`${inputCls} resize-none`}
+                  value={form.address ?? ''}
+                  onChange={e => setForm({ ...form, address: e.target.value })}
+                  rows={2}
+                  placeholder="Your address"
+                />
+              </FormField>
             </div>
+          </div>
 
-            {/* Beverage preference */}
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-gray-500 dark:text-white/50 uppercase tracking-wide">Beverage Preference</label>
-              <div className="flex flex-wrap gap-2">
-                {BEVERAGE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setForm({ ...form, beverage_preference: opt.value })}
-                    className={[
-                      'px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all',
-                      form.beverage_preference === opt.value
-                        ? 'bg-[#F97316]/20 border-[#F97316]/50 text-[#F97316]'
-                        : 'bg-white/5 border-white/15 text-gray-500 dark:text-white/50 hover:border-white/30',
-                    ].join(' ')}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+          <div className="h-px bg-gray-100 dark:bg-gray-800" />
+
+          {/* Section: Emergency */}
+          <div>
+            <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-4">Emergency Contact</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <FormField label="Contact Name">
+                <input
+                  className={inputCls}
+                  value={form.emergency_contact_name ?? ''}
+                  onChange={e => setForm({ ...form, emergency_contact_name: e.target.value })}
+                  placeholder="e.g. Parent / Spouse"
+                />
+              </FormField>
+              <FormField label="Contact Phone">
+                <input
+                  className={inputCls}
+                  value={form.emergency_contact_phone ?? ''}
+                  onChange={e => setForm({ ...form, emergency_contact_phone: e.target.value })}
+                  placeholder="10-digit mobile"
+                  inputMode="numeric"
+                  maxLength={10}
+                />
+              </FormField>
             </div>
+          </div>
 
+          <div className="h-px bg-gray-100 dark:bg-gray-800" />
+
+          {/* Section: Preferences */}
+          <div>
+            <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-3">Beverage Preference</p>
+            <div className="flex flex-wrap gap-2">
+              {BEVERAGE_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setForm({ ...form, beverage_preference: opt.value })}
+                  className={[
+                    'px-3 py-1.5 rounded-xl text-sm font-semibold border transition-all',
+                    form.beverage_preference === opt.value
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-blue-300',
+                  ].join(' ')}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Error */}
+          {saveError && (
+            <div className="flex items-center gap-2 text-red-600 dark:text-red-400 text-sm bg-red-50 dark:bg-red-900/10 px-4 py-3 rounded-xl border border-red-200 dark:border-red-800">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" /> {saveError}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-3 pt-1">
+            <button
+              onClick={cancelEdit}
+              className="flex-1 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition"
+            >
+              Cancel
+            </button>
             <button
               onClick={() => updateProfile(form)}
               disabled={saving}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-[#1A3C34] to-emerald-700 text-white font-bold text-sm flex items-center justify-center gap-2 transition-all hover:from-emerald-700 hover:to-emerald-600"
+              className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold flex items-center justify-center gap-2 transition disabled:opacity-60"
             >
-              {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</> : <><Save className="w-4 h-4" /> Save Changes</>}
+              {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</> : <><Save className="w-4 h-4" /> Save Profile</>}
             </button>
           </div>
-        ) : (
-          <>
-            {[
-              { icon: <Mail className="w-4 h-4" />, label: 'Email', value: profile.email },
-              { icon: <Phone className="w-4 h-4" />, label: 'Mobile', value: profile.mobile_number ?? '—' },
-              { icon: <Calendar className="w-4 h-4" />, label: 'Date of Birth', value: profile.dob ?? '—' },
-              { icon: <User className="w-4 h-4" />, label: 'Gender', value: profile.gender ?? '—' },
-              { icon: <MapPin className="w-4 h-4" />, label: 'District', value: profile.district ?? '—' },
-              { icon: <Shield className="w-4 h-4" />, label: 'Aadhaar', value: profile.aadhaar_masked },
-            ].map((row) => (
-              <div key={row.label} className="flex items-center gap-4 px-5 py-4">
-                <div className="w-8 h-8 rounded-lg bg-[#1A3C34]/10 dark:bg-white/5 flex items-center justify-center text-[#1A3C34] dark:text-white/40 flex-shrink-0">
-                  {row.icon}
-                </div>
-                <div>
-                  <p className="text-[10px] font-semibold text-gray-400 dark:text-white/30 uppercase tracking-wide">{row.label}</p>
-                  <p className="text-sm font-medium text-gray-800 dark:text-white mt-0.5">{row.value}</p>
-                </div>
-              </div>
-            ))}
-
-            {/* Beverage preference */}
-            <div className="flex items-center gap-4 px-5 py-4">
-              <div className="w-8 h-8 rounded-lg bg-[#1A3C34]/10 dark:bg-white/5 flex items-center justify-center text-[#1A3C34] dark:text-white/40 flex-shrink-0">
-                🍺
-              </div>
-              <div>
-                <p className="text-[10px] font-semibold text-gray-400 dark:text-white/30 uppercase tracking-wide">Beverage Preference</p>
-                <p className="text-sm font-medium text-gray-800 dark:text-white mt-0.5">
-                  {BEVERAGE_OPTIONS.find((o) => o.value === profile.beverage_preference)?.label ?? profile.beverage_preference}
-                </p>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }

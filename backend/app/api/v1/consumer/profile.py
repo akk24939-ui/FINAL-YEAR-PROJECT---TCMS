@@ -1,14 +1,13 @@
-"""Consumer profile endpoints — view and update profile, upload photo."""
+"""Consumer profile endpoints — view and update full profile, upload photo."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_consumer
-from app.models.consumer_profile import BeveragePreference, Gender
 from app.models.user import User
-from app.schemas.consumer import ConsumerProfileResponse
+from app.schemas.dashboard import ProfileResponse, ProfileUpdateRequest
 from app.services import consumer_service, image_service
 
 router = APIRouter(prefix="/profile", tags=["Consumer Profile"])
@@ -17,36 +16,30 @@ _ALLOWED_PHOTO_MIMES = ["image/jpeg", "image/png"]
 _MAX_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 
-@router.get("", response_model=ConsumerProfileResponse)
+@router.get("", response_model=ProfileResponse)
 def get_profile(
     current_user: User = Depends(get_current_consumer),
     db=Depends(get_db),
 ):
-    """Return the consumer's profile with masked Aadhaar."""
-    return consumer_service.get_profile(user=current_user, db=db)
+    """Return the consumer's full profile with masked Aadhaar."""
+    return consumer_service.get_full_profile(user=current_user, db=db)
 
 
-@router.put("", response_model=ConsumerProfileResponse)
+@router.put("", response_model=ProfileResponse)
 def update_profile(
-    request: Request,
-    district: str | None = None,
-    gender: Gender | None = None,
-    address: str | None = None,
-    beverage_preference: BeveragePreference | None = None,
+    body: ProfileUpdateRequest,
     current_user: User = Depends(get_current_consumer),
     db=Depends(get_db),
 ):
-    """Update non-sensitive consumer profile fields.
+    """Update editable consumer profile fields.
 
-    Only district, gender, address, and beverage_preference are mutable here.
+    Updatable: full_name, mobile_number, gender, district, address,
+               blood_group, emergency_contact_*, beverage_preference.
+    Immutable: Aadhaar number, date of birth (after initial registration).
     """
-    update_data = {
-        "district": district,
-        "gender": gender,
-        "address": address,
-        "beverage_preference": beverage_preference,
-    }
-    return consumer_service.update_profile(user=current_user, data=update_data, db=db)
+    return consumer_service.update_full_profile(
+        user=current_user, data=body, db=db
+    )
 
 
 @router.post("/photo", status_code=200)

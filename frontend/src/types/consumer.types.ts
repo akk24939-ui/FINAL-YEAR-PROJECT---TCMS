@@ -1,7 +1,8 @@
-// Consumer Module TypeScript types
+// Consumer Module TypeScript types — extended for Dashboard module
 
 export type Gender = 'MALE' | 'FEMALE' | 'OTHER' | 'PREFER_NOT_TO_SAY'
 export type BeveragePreference = 'BEER' | 'WINE' | 'SPIRITS' | 'MIXED' | 'NONE'
+export type BeverageChoice = 'BEER' | 'WINE' | 'SPIRITS' | 'MIXED'
 export type NotificationType = 'INFO' | 'WARN' | 'DANGER' | 'SUCCESS'
 export type NotificationCategory =
   | 'LIMIT_WARNING'
@@ -10,6 +11,7 @@ export type NotificationCategory =
   | 'SELF_RESTRICTION'
   | 'SYSTEM'
 
+// ── OCR / Registration ───────────────────────────────────────────────────────
 export interface OcrConfidence {
   full_name: number
   dob: number
@@ -40,6 +42,7 @@ export interface RegisterFinalRequest {
   address?: string
 }
 
+// ── Self-Restriction (lock/unlock) ───────────────────────────────────────────
 export interface SelfRestrictionData {
   daily_limit_sd: number
   weekly_limit_sd: number
@@ -53,6 +56,29 @@ export interface SelfRestrictionData {
   lock_reason?: string
 }
 
+// ── Consumer Limits (dedicated table) ────────────────────────────────────────
+export interface ConsumerLimitsResponse {
+  id: string
+  consumer_id: string
+  daily_limit_sd: number
+  weekly_limit_sd: number
+  monthly_limit_sd: number
+  beverage_preference: BeverageChoice[]
+  warn_weekly_vs_daily: boolean
+  warn_monthly_vs_weekly: boolean
+  is_locked: boolean
+  locked_until?: string
+  updated_at: string
+}
+
+export interface ConsumerLimitsUpdateRequest {
+  daily_limit_sd: number
+  weekly_limit_sd: number
+  monthly_limit_sd: number
+  beverage_preference: BeverageChoice[]
+}
+
+// ── Profile (extended) ────────────────────────────────────────────────────────
 export interface ConsumerProfile {
   id: string
   user_id: string
@@ -64,13 +90,76 @@ export interface ConsumerProfile {
   gender?: Gender
   district?: string
   address?: string
+  blood_group?: string
+  emergency_contact_name?: string
+  emergency_contact_phone?: string
   photo_path?: string
   beverage_preference: BeveragePreference
   is_teetotaler: boolean
   teetotaler_set_at?: string
+  member_since?: string
+  is_self_restricted: boolean
+  restriction_locked_until?: string
+  // Legacy field kept for register flow compatibility
   restrictions?: SelfRestrictionData
 }
 
+export interface ProfileUpdateRequest {
+  full_name?: string
+  mobile_number?: string
+  gender?: Gender
+  district?: string
+  address?: string
+  blood_group?: string
+  emergency_contact_name?: string
+  emergency_contact_phone?: string
+  beverage_preference?: BeveragePreference
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+export interface ConsumptionSummary {
+  consumed_sd: number
+  limit_sd: number
+  percent_used: number
+  status: 'safe' | 'warn' | 'exceeded'
+  consumed_beer_ml?: number
+  consumed_wine_ml?: number
+  consumed_spirits_ml?: number
+}
+
+export interface DailyChartPoint {
+  label: string   // "Mon"
+  date: string    // "2026-07-04"
+  consumed_sd: number
+  limit_sd: number
+}
+
+export interface WeeklyChartPoint {
+  label: string      // "Week 1"
+  week_start: string // ISO date
+  consumed_sd: number
+  limit_sd: number
+}
+
+export interface DashboardResponse {
+  consumer_name: string
+  aadhaar_masked: string
+  member_since?: string
+  is_teetotaler: boolean
+  is_self_restricted: boolean
+  restriction_locked_until?: string
+  today: ConsumptionSummary
+  this_week: ConsumptionSummary
+  this_month: ConsumptionSummary
+  daily_chart: DailyChartPoint[]
+  weekly_chart: WeeklyChartPoint[]
+  who_daily_advisory: number
+  who_weekly_advisory: number
+  alert_type?: string
+  alert_message?: string
+}
+
+// ── Notifications ─────────────────────────────────────────────────────────────
 export interface NotificationItem {
   id: string
   notification_type: NotificationType
@@ -82,6 +171,7 @@ export interface NotificationItem {
   created_at: string
 }
 
+// ── Purchases ─────────────────────────────────────────────────────────────────
 export interface Purchase {
   id: string
   shop_name?: string
@@ -99,12 +189,14 @@ export interface PaginatedPurchases {
   limit: number
 }
 
+// ── QR ────────────────────────────────────────────────────────────────────────
 export interface QrResponse {
   qr_image_base64: string
   expires_at: string
   issued_at: string
 }
 
+// ── Legacy limit types (used by SelfRestriction routes) ───────────────────────
 export interface LimitUpdateRequest {
   daily_limit_sd: number
   weekly_limit_sd: number

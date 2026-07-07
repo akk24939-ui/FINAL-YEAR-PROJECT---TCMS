@@ -13,6 +13,7 @@ from app.models.consumer_profile import (           # noqa: F401
     ConsumerProfile, Gender, BeveragePreference
 )
 from app.models.restriction import SelfRestriction  # noqa: F401
+from app.models.consumer_limits import ConsumerLimits  # noqa: F401
 from app.models.notification import (               # noqa: F401
     Notification, NotificationType, NotificationCategory
 )
@@ -37,6 +38,7 @@ __all__ = [
     "UserRole_",
     "ConsumerProfile", "Gender", "BeveragePreference",
     "SelfRestriction",
+    "ConsumerLimits",
     "Notification", "NotificationType", "NotificationCategory",
     "QrCode",
     "AuditLog", "AuditEventType",

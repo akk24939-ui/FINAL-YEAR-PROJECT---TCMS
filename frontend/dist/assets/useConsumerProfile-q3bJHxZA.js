@@ -1,0 +1,1 @@
+import{u as o}from"./useQuery-Qm29bmLh.js";import{c as i}from"./consumer.api-D4KhumRm.js";const t=["consumer","profile"];function u(){const e=o({queryKey:t,queryFn:()=>i.getProfile().then(r=>r.data),staleTime:12e4,gcTime:3e5,retry:1});return{profile:e.data,isLoading:e.isLoading,isFetching:e.isFetching,error:e.error,refetch:e.refetch}}export{t as P,u};

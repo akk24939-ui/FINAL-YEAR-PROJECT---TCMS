@@ -1,9 +1,45 @@
 import React, { useState, useEffect } from 'react'
 import { Lock, Unlock, Clock, AlertCircle, Loader2, CheckCircle, X } from 'lucide-react'
-import { useLimits, useLockLimits, useConfirmIncrease } from '../../../hooks/useLimits'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useLockLimits, useConfirmIncrease } from '../../../hooks/useLimits'
+import { consumerApi } from '../../../api/consumer.api'
+import type { SelfRestrictionData } from '../../../types/consumer.types'
+
+// ─── Restriction query key ────────────────────────────────────────────────────
+// Uses the SelfRestriction endpoint (/limits/lock etc.) for lock state.
+// This is separate from the ConsumerLimits query.
+const RESTRICTION_QUERY_KEY = ['consumer', 'self-restriction'] as const
+
+function useRestriction() {
+  return useQuery<SelfRestrictionData, Error>({
+    queryKey: RESTRICTION_QUERY_KEY,
+    queryFn: async () => {
+      // The restriction state is embedded in the limits response's lock fields.
+      // We fetch from getLimits and coerce to SelfRestrictionData shape.
+      const r = await consumerApi.getLimits()
+      const d = r.data as SelfRestrictionData & typeof r.data
+      return {
+        daily_limit_sd: 0,
+        weekly_limit_sd: 0,
+        monthly_limit_sd: 0,
+        is_locked: d.is_locked ?? false,
+        locked_until: d.locked_until,
+        // pending fields and lock_reason not in ConsumerLimitsResponse —
+        // default to undefined (feature not yet exposed by this endpoint)
+        pending_daily_limit_sd: undefined,
+        pending_weekly_limit_sd: undefined,
+        pending_monthly_limit_sd: undefined,
+        lock_requested_at: undefined,
+        lock_reason: undefined,
+      } satisfies SelfRestrictionData
+    },
+    staleTime: 60_000,
+    retry: 1,
+  })
+}
 
 // ─── Countdown hook ───────────────────────────────────────────────────────────
-function useCountdown(targetIso: string | undefined): { days: number; hours: number; minutes: number; seconds: number; expired: boolean } {
+function useCountdown(targetIso: string | undefined) {
   const calc = () => {
     if (!targetIso) return { days: 0, hours: 0, minutes: 0, seconds: 0, expired: true }
     const diff = new Date(targetIso).getTime() - Date.now()
@@ -40,49 +76,54 @@ const LockModal: React.FC<LockModalProps> = ({ onConfirm, onClose, loading }) =>
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-sm rounded-2xl bg-[#0D2B22] border border-white/10 shadow-2xl p-6 space-y-5">
-        <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-white/10 text-white/50 hover:text-white">
+      <div className="relative z-10 w-full max-w-sm rounded-2xl bg-white dark:bg-[#0D2B22] border border-gray-200 dark:border-white/10 shadow-2xl p-6 space-y-5">
+        <button onClick={onClose} className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-white/10 text-gray-500 dark:text-white/50">
           <X className="w-4 h-4" />
         </button>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
-            <Lock className="w-5 h-5 text-red-400" />
+            <Lock className="w-5 h-5 text-red-500 dark:text-red-400" />
           </div>
           <div>
-            <h3 className="font-bold text-white">Lock My Limits</h3>
-            <p className="text-xs text-white/40">Prevent limit increases for a set period</p>
+            <h3 className="font-bold text-gray-900 dark:text-white">Lock My Limits</h3>
+            <p className="text-xs text-gray-500 dark:text-white/40">Prevent limit increases for a set period</p>
           </div>
         </div>
 
         <div className="space-y-4">
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-white/50 uppercase tracking-wide">Lock Duration (days)</label>
+            <label className="text-xs font-semibold text-gray-500 dark:text-white/50 uppercase tracking-wide">
+              Lock Duration (days)
+            </label>
             <input
               type="number"
               min={1}
               max={365}
               value={days}
               onChange={(e) => setDays(Number(e.target.value))}
-              className="w-full bg-white/5 border border-white/15 focus:border-[#F97316] text-white rounded-lg px-3 py-2.5 text-sm outline-none"
+              className="w-full bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/15 focus:border-blue-500 dark:focus:border-[#F97316] text-gray-900 dark:text-white rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500/20 transition"
             />
-            <p className="text-[10px] text-white/30">1–365 days</p>
+            <p className="text-[10px] text-gray-400 dark:text-white/30">1–365 days</p>
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-white/50 uppercase tracking-wide">Reason (optional)</label>
+            <label className="text-xs font-semibold text-gray-500 dark:text-white/50 uppercase tracking-wide">
+              Reason (optional)
+            </label>
             <input
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="e.g. Health goal"
-              className="w-full bg-white/5 border border-white/15 focus:border-[#F97316] text-white rounded-lg px-3 py-2.5 text-sm outline-none placeholder-white/20"
+              className="w-full bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/15 focus:border-blue-500 text-gray-900 dark:text-white rounded-xl px-3 py-2.5 text-sm outline-none placeholder-gray-400 dark:placeholder-white/20 transition"
             />
           </div>
         </div>
 
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
-          <p className="text-red-400 text-xs leading-relaxed">
-            ⚠️ Once locked, you cannot increase your limits for <strong>{days} day{days !== 1 ? 's' : ''}</strong>.
+          <p className="text-red-600 dark:text-red-400 text-xs leading-relaxed">
+            ⚠️ Once locked, you cannot increase your limits for{' '}
+            <strong>{days} day{days !== 1 ? 's' : ''}</strong>.
             Decreasing limits is always allowed.
           </p>
         </div>
@@ -101,33 +142,34 @@ const LockModal: React.FC<LockModalProps> = ({ onConfirm, onClose, loading }) =>
 
 // ─── Main component ───────────────────────────────────────────────────────────
 const SelfRestrictionPanel: React.FC = () => {
-  const { limits, isLoading } = useLimits()
+  const qc = useQueryClient()
+  const { data: restriction, isLoading } = useRestriction()
   const { mutate: lockLimits, isPending: lockPending } = useLockLimits()
   const { mutate: confirmIncrease, isPending: confirmPending } = useConfirmIncrease()
   const [lockModal, setLockModal] = useState(false)
 
-  const lockCd = useCountdown(limits?.locked_until)
+  const lockCd = useCountdown(restriction?.locked_until)
   const cooloffCd = useCountdown(
-    limits?.lock_requested_at
-      ? new Date(new Date(limits.lock_requested_at).getTime() + 24 * 60 * 60 * 1000).toISOString()
+    restriction?.lock_requested_at
+      ? new Date(new Date(restriction.lock_requested_at).getTime() + 24 * 60 * 60 * 1000).toISOString()
       : undefined
   )
 
   if (isLoading) {
     return (
       <div className="rounded-2xl bg-white dark:bg-[#0D2B22] border border-gray-100 dark:border-white/10 p-6 flex items-center justify-center h-32">
-        <Loader2 className="w-6 h-6 text-[#F97316] animate-spin" />
+        <Loader2 className="w-6 h-6 text-blue-500 dark:text-[#F97316] animate-spin" />
       </div>
     )
   }
 
-  if (!limits) return null
+  if (!restriction) return null
 
-  const isLocked = limits.is_locked && !lockCd.expired
+  const isLocked = restriction.is_locked && !lockCd.expired
   const hasPendingIncrease =
-    limits.pending_daily_limit_sd !== undefined ||
-    limits.pending_weekly_limit_sd !== undefined ||
-    limits.pending_monthly_limit_sd !== undefined
+    restriction.pending_daily_limit_sd !== undefined ||
+    restriction.pending_weekly_limit_sd !== undefined ||
+    restriction.pending_monthly_limit_sd !== undefined
 
   return (
     <>
@@ -136,8 +178,15 @@ const SelfRestrictionPanel: React.FC = () => {
           loading={lockPending}
           onClose={() => setLockModal(false)}
           onConfirm={(days, reason) => {
-            lockLimits({ lock_days: days, lock_reason: reason })
-            setLockModal(false)
+            lockLimits(
+              { lock_days: days, lock_reason: reason },
+              {
+                onSuccess: () => {
+                  setLockModal(false)
+                  qc.invalidateQueries({ queryKey: RESTRICTION_QUERY_KEY })
+                },
+              }
+            )
           }}
         />
       )}
@@ -156,10 +205,10 @@ const SelfRestrictionPanel: React.FC = () => {
             <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-4 space-y-3">
               <div className="flex items-center gap-2">
                 <Lock className="w-4 h-4 text-red-400" />
-                <span className="text-sm font-bold text-red-400">Limits Locked</span>
+                <span className="text-sm font-bold text-red-500 dark:text-red-400">Limits Locked</span>
               </div>
-              {limits.lock_reason && (
-                <p className="text-xs text-white/50">Reason: {limits.lock_reason}</p>
+              {restriction.lock_reason && (
+                <p className="text-xs text-gray-500 dark:text-white/50">Reason: {restriction.lock_reason}</p>
               )}
               <div className="flex items-center gap-4 text-center">
                 {[
@@ -169,15 +218,17 @@ const SelfRestrictionPanel: React.FC = () => {
                   { label: 'Seconds', val: lockCd.seconds },
                 ].map((unit) => (
                   <div key={unit.label} className="flex-1">
-                    <div className="text-xl font-black text-red-400 font-mono">
+                    <div className="text-xl font-black text-red-500 dark:text-red-400 font-mono">
                       {String(unit.val).padStart(2, '0')}
                     </div>
-                    <div className="text-[10px] text-white/30 uppercase">{unit.label}</div>
+                    <div className="text-[10px] text-gray-400 dark:text-white/30 uppercase">{unit.label}</div>
                   </div>
                 ))}
               </div>
-              <p className="text-[10px] text-white/30 text-center">
-                Unlocks: {limits.locked_until ? new Date(limits.locked_until).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '—'}
+              <p className="text-[10px] text-gray-400 dark:text-white/30 text-center">
+                Unlocks: {restriction.locked_until
+                  ? new Date(restriction.locked_until).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+                  : '—'}
               </p>
             </div>
           )}
@@ -186,10 +237,10 @@ const SelfRestrictionPanel: React.FC = () => {
           {hasPendingIncrease && (
             <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-amber-400" />
-                <span className="text-sm font-bold text-amber-400">Increase Requested — Cooling Off</span>
+                <Clock className="w-4 h-4 text-amber-500 dark:text-amber-400" />
+                <span className="text-sm font-bold text-amber-600 dark:text-amber-400">Increase Requested — Cooling Off</span>
               </div>
-              <p className="text-xs text-white/50">
+              <p className="text-xs text-gray-500 dark:text-white/50">
                 A 24-hour cooling-off period is required before your limit increase takes effect.
               </p>
               {!cooloffCd.expired ? (
@@ -200,10 +251,10 @@ const SelfRestrictionPanel: React.FC = () => {
                     { label: 'Seconds', val: cooloffCd.seconds },
                   ].map((unit) => (
                     <div key={unit.label} className="flex-1">
-                      <div className="text-xl font-black text-amber-400 font-mono">
+                      <div className="text-xl font-black text-amber-500 dark:text-amber-400 font-mono">
                         {String(unit.val).padStart(2, '0')}
                       </div>
-                      <div className="text-[10px] text-white/30 uppercase">{unit.label}</div>
+                      <div className="text-[10px] text-gray-400 dark:text-white/30 uppercase">{unit.label}</div>
                     </div>
                   ))}
                 </div>
@@ -234,7 +285,7 @@ const SelfRestrictionPanel: React.FC = () => {
               </div>
               <button
                 onClick={() => setLockModal(true)}
-                className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"
+                className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-red-500/10 text-red-600 dark:text-red-500 hover:bg-red-500/20 transition-colors"
               >
                 <Lock className="w-3 h-3" /> Lock
               </button>

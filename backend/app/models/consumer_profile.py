@@ -71,6 +71,11 @@ class ConsumerProfile(Base):
     district: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # ── Extended profile ───────────────────────────────────────────────────────
+    blood_group: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # A+, B-, O+, etc.
+    emergency_contact_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    emergency_contact_phone: Mapped[Optional[str]] = mapped_column(String(15), nullable=True)
+
     # ── Profile photo ──────────────────────────────────────────────────────────
     # Relative path within the upload directory. EXIF stripped before save.
     photo_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
@@ -96,10 +101,13 @@ class ConsumerProfile(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    # ── Relationships ──────────────────────────────────────────────────────────
+    # ── Relationships ───────────────────────────────────────────────────────
     user: Mapped["User"] = relationship("User", back_populates="consumer_profile")
     restrictions: Mapped[list["SelfRestriction"]] = relationship(
         "SelfRestriction", back_populates="consumer", cascade="all, delete-orphan"
+    )
+    limits: Mapped["ConsumerLimits | None"] = relationship(
+        "ConsumerLimits", back_populates="consumer", uselist=False, cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
