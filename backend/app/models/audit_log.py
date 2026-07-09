@@ -1,39 +1,15 @@
 """AuditLog model — immutable append-only security audit trail.
 
-Writes one row per security-relevant event. This table is NEVER updated or
-deleted programmatically (no CASCADE deletes, no UPDATE queries).
-
-Events logged (event_type values):
-  consumer_registered  — new account created
-  login_success        — successful authentication
-  login_failed         — wrong password / OTP fail
-  otp_sent             — OTP generated and dispatched
-  otp_verified         — OTP successfully verified
-  account_locked       — too many failed attempts
-  logout               — explicit sign-out
-  limit_changed        — daily/weekly/monthly limits updated
-  limit_increase_requested — cooling-off period started
-  limit_increase_confirmed — cooling-off passed, limits raised
-  teetotaler_enabled   — teetotaler mode turned on
-  teetotaler_disabled  — teetotaler mode turned off
-  self_restriction_locked   — lock applied
-  self_restriction_unlocked — lock lifted
-  qr_generated         — QR code generated
-  pdf_downloaded       — PDF report downloaded
-  photo_uploaded       — profile photo updated
-  profile_updated      — other profile field changed
-
-Security notes:
-- No PII in `metadata_json` — only structural data (e.g. limit old/new value).
-- IP is stored for intrusion detection; hashed if GDPR-strict mode required.
-- user_id is nullable for pre-auth events (e.g. failed login with unknown email).
+Extended for Admin Module with:
+- actor_id: the admin who performed an action on another user (target = user_id)
+- New event types for all admin operations
 """
 import uuid
 import enum
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, func, Enum as SAEnum
+from sqlalchemy import String, DateTime, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
@@ -41,6 +17,7 @@ from app.core.database import Base
 
 
 class AuditEventType(str, enum.Enum):
+    # Consumer events
     CONSUMER_REGISTERED = "consumer_registered"
     LOGIN_SUCCESS = "login_success"
     LOGIN_FAILED = "login_failed"
@@ -60,6 +37,25 @@ class AuditEventType(str, enum.Enum):
     PHOTO_UPLOADED = "photo_uploaded"
     PROFILE_UPDATED = "profile_updated"
     TOKEN_REFRESHED = "token_refreshed"
+    # Admin — shop management
+    ADMIN_CREATED_SHOP = "admin_created_shop"
+    ADMIN_RESET_PIN = "admin_reset_pin"
+    ADMIN_SUSPENDED_SHOP = "admin_suspended_shop"
+    ADMIN_REACTIVATED_SHOP = "admin_reactivated_shop"
+    SHOP_PIN_FAILED = "shop_pin_failed"
+    SHOP_PIN_LOCKED = "shop_pin_locked"
+    SHOP_LOGIN_SUCCESS = "shop_login_success"
+    # Admin — doctor management
+    ADMIN_CREATED_DOCTOR = "admin_created_doctor"
+    ADMIN_ACTIVATED_DOCTOR = "admin_activated_doctor"
+    ADMIN_DEACTIVATED_DOCTOR = "admin_deactivated_doctor"
+    ADMIN_REVOKED_DOCTOR = "admin_revoked_doctor"
+    DOCTOR_LOGIN_SUCCESS = "doctor_login_success"
+    # Admin — global config
+    ADMIN_UPDATED_GLOBAL_LIMITS = "admin_updated_global_limits"
+    ADMIN_UPDATED_CONFIG = "admin_updated_config"
+    # Token
+    TOKEN_REVOKED = "token_revoked"
 
 
 class AuditLog(Base):
@@ -69,8 +65,17 @@ class AuditLog(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    # Nullable so pre-auth failures (wrong email) can still be logged.
+    # Target user (who this event is about). Nullable for pre-auth failures.
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Actor — the admin who performed an action on the target user.
+    # Same as user_id for self-actions (consumer changing own limits etc.)
+    actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -84,25 +89,30 @@ class AuditLog(Base):
     # Human-readable summary (no PII)
     description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
-    # Structured metadata — structural data only, never PII.
-    # Example: {"old_daily": 2.0, "new_daily": 3.0}
+    # Structural metadata — never PII.
+    # Example: {"old_daily": 2.0, "new_daily": 3.0} or {"shop_code": "TSM-CHE-001"}
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
-    # Network / session context (for intrusion detection)
+    # Network context
     ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     session_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
-    # Immutable timestamp — server-side only, cannot be set by client
+    # Immutable timestamp
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
 
-    # Relationship (no cascade delete — audit records are permanent)
-    user: Mapped[Optional["User"]] = relationship("User", back_populates="audit_logs")
+    # Relationships
+    user: Mapped[Optional["User"]] = relationship(
+        "User", back_populates="audit_logs", foreign_keys=[user_id]
+    )
+    actor: Mapped[Optional["User"]] = relationship(
+        "User", back_populates="acted_audit_logs", foreign_keys=[actor_id]
+    )
 
     def __repr__(self) -> str:
         return (
             f"<AuditLog event={self.event_type} "
-            f"user={self.user_id} at={self.created_at}>"
+            f"user={self.user_id} actor={self.actor_id} at={self.created_at}>"
         )

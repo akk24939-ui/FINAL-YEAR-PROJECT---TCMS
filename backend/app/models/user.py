@@ -1,11 +1,10 @@
-"""User model — enhanced for Consumer Module.
+"""User model — enhanced for Admin Module.
 
-Changes from v1:
-- Added OTP fields (hashed, single-use, time-boxed, lockout)
-- Added refresh_token_hash for server-side rotation validation
-- Added last_login_ip for audit trail
-- Removed inline UserRole enum (moved to role.py / user_role.py for RBAC table)
-- Kept backward-compat `role` column as a denormalised fast-read field
+Changes from v2 (Consumer Module):
+- Added must_change_password: forces password reset on next login
+- Added token_version: increment to immediately invalidate all JWTs
+- Added pin_hash / pin_failed_attempts / pin_locked_until: shop operator PIN auth
+- Added last_pin_rotation: track PIN age for 90-day rotation policy
 """
 import uuid
 import enum
@@ -40,7 +39,6 @@ class User(Base):
     email: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True
     )
-    # mobile used as a login identifier (optional — consumer may use it)
     mobile_number: Mapped[Optional[str]] = mapped_column(
         String(15), unique=True, nullable=True, index=True
     )
@@ -56,7 +54,29 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # ── OTP fields (hashed at rest, single-use) ────────────────────────────────
+    # ── Forced password change (admin first-login, doctor first-login) ─────────
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
+    # ── Token version — increment to invalidate ALL existing JWTs for this user ─
+    # Used by: admin revoking doctor access, emergency account lockout.
+    token_version: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+
+    # ── Shop Operator PIN auth (separate from password) ────────────────────────
+    # bcrypt-hashed 6-digit PIN. Only set for OPERATOR role users.
+    pin_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pin_failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pin_locked_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_pin_rotation: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # ── OTP fields (hashed at rest, single-use, time-boxed, lockout) ──────────
     otp_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     otp_expires_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -73,8 +93,6 @@ class User(Base):
     )
 
     # ── Refresh token (hashed for server-side rotation) ───────────────────────
-    # We store only a bcrypt hash of the refresh token so even DB access can't
-    # replay a stolen refresh token.
     refresh_token_hash: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True
     )
@@ -98,6 +116,11 @@ class User(Base):
         "ConsumerProfile", back_populates="user", uselist=False,
         cascade="all, delete-orphan"
     )
+    doctor_profile: Mapped[Optional["DoctorProfile"]] = relationship(
+        "DoctorProfile", back_populates="user", uselist=False,
+        cascade="all, delete-orphan",
+        foreign_keys="DoctorProfile.user_id",
+    )
     user_roles: Mapped[list["UserRole_"]] = relationship(
         "UserRole_", back_populates="user", cascade="all, delete-orphan"
     )
@@ -111,9 +134,11 @@ class User(Base):
         "QrCode", back_populates="user", cascade="all, delete-orphan"
     )
     audit_logs: Mapped[list["AuditLog"]] = relationship(
-        "AuditLog", back_populates="user"
+        "AuditLog", back_populates="user", foreign_keys="AuditLog.user_id"
     )
-    # Legacy relationships — kept for other modules
+    acted_audit_logs: Mapped[list["AuditLog"]] = relationship(
+        "AuditLog", back_populates="actor", foreign_keys="AuditLog.actor_id"
+    )
     purchases: Mapped[list["Purchase"]] = relationship(
         "Purchase", back_populates="consumer", foreign_keys="Purchase.consumer_id"
     )

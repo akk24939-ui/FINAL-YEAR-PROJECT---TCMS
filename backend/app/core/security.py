@@ -47,17 +47,19 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ── JWT helpers ────────────────────────────────────────────────────────────────
 
-def create_access_token(user_id: str, role: str) -> str:
+def create_access_token(user_id: str, role: str, token_version: int = 0) -> str:
     """Create a signed JWT access token valid for ACCESS_TOKEN_EXPIRE_MINUTES."""
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
         "role": role,
+        "token_version": token_version,
         "iat": now,
         "exp": now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         "type": "access",
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
 
 
 def create_refresh_token(user_id: str) -> str:

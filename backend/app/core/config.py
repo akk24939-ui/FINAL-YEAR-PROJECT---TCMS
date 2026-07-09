@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 5
     COOLING_OFF_HOURS: int = 24
     ENVIRONMENT: str = "development"
+    # Admin bootstrap — read by scripts/seed_admin.py only, ignored by app
+    ADMIN_SEED_USERNAME: str = "admin@tasmac.gov.in"
+    ADMIN_SEED_PASSWORD: str = "271527"
 
     class Config:
         env_file = ".env"
