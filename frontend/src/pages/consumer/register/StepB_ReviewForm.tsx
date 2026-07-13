@@ -116,9 +116,9 @@ const StepB_ReviewForm: React.FC<Props> = ({ ocrData, onComplete, onBack }) => {
       dob: ocrData.dob ?? '',
       gender: (ocrData.gender as Gender) ?? 'MALE',
       aadhaar_number: ocrData.aadhaar_number ?? '',
-      email: '',
-      mobile_number: '',
-      district: '',
+      email: ocrData.email ?? '',
+      mobile_number: ocrData.mobile_number ?? '',
+      district: ocrData.district ?? '',
       address: ocrData.address ?? '',
     },
   })
@@ -127,28 +127,37 @@ const StepB_ReviewForm: React.FC<Props> = ({ ocrData, onComplete, onBack }) => {
     onComplete(values as Partial<RegisterFinalRequest>)
   }
 
+  const isManual = ocrData.source === 'MANUAL'
+
+  const getConf = (field: keyof typeof conf) =>
+    isManual ? undefined : conf[field]
+
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="p-6 sm:p-8 space-y-5">
       <div>
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Review Extracted Details</h2>
+        <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+          {ocrData.source === 'MANUAL' ? 'Review Your Details' : 'Review Extracted Details'}
+        </h2>
         <p className="text-sm text-gray-600 dark:text-white/60 mt-1">
-          Fields with a confidence badge were auto-filled. Please verify highlighted fields.
+          {ocrData.source === 'MANUAL'
+            ? 'Please double-check all fields before continuing.'
+            : 'Fields with a confidence badge were auto-filled. Please verify highlighted fields.'}
         </p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* Full name */}
-        <Field label="Full Name" error={errors.full_name?.message} confidence={conf.full_name}>
+        <Field label="Full Name" error={errors.full_name?.message} confidence={getConf('full_name')}>
           <input className={inputCls} {...register('full_name')} placeholder="Your full name" />
         </Field>
 
         {/* DOB */}
-        <Field label="Date of Birth" error={errors.dob?.message} confidence={conf.dob}>
+        <Field label="Date of Birth" error={errors.dob?.message} confidence={getConf('dob')}>
           <input type="date" className={inputCls} {...register('dob')} />
         </Field>
 
         {/* Gender */}
-        <Field label="Gender" error={errors.gender?.message} confidence={conf.gender}>
+        <Field label="Gender" error={errors.gender?.message} confidence={getConf('gender')}>
           <select className={selectCls} {...register('gender')}>
             <option value="MALE">Male</option>
             <option value="FEMALE">Female</option>
@@ -158,7 +167,7 @@ const StepB_ReviewForm: React.FC<Props> = ({ ocrData, onComplete, onBack }) => {
         </Field>
 
         {/* Aadhaar */}
-        <Field label="Aadhaar Number (12 digits)" error={errors.aadhaar_number?.message} confidence={conf.aadhaar_number}>
+        <Field label="Aadhaar Number (12 digits)" error={errors.aadhaar_number?.message} confidence={getConf('aadhaar_number')}>
           <input
             className={inputCls}
             {...register('aadhaar_number')}
@@ -201,7 +210,7 @@ const StepB_ReviewForm: React.FC<Props> = ({ ocrData, onComplete, onBack }) => {
       </div>
 
       {/* Address */}
-      <Field label="Address (optional)" error={errors.address?.message} confidence={conf.address}>
+      <Field label="Address (optional)" error={errors.address?.message} confidence={getConf('address')}>
         <textarea
           className={`${inputCls} resize-none`}
           {...register('address')}

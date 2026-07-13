@@ -67,18 +67,29 @@ export interface CreateShopPayload {
   license_number?: string
   operator_name: string
   operator_phone: string
+  initial_password: string   // Admin-set initial password; operator must change on first login
 }
 
 export interface CreateShopResponse {
   shop: ShopRecord
   operator_email: string
+  shop_code: string
   initial_pin: string
+  must_change_password: boolean
   message: string
 }
 
 export interface ResetPinResponse {
   shop_code: string
   new_pin: string
+  message: string
+}
+
+export interface TempPasswordResponse {
+  temp_password: string
+  expires_in_hours: number
+  must_change_password: boolean
+  operator_name: string
   message: string
 }
 

@@ -10,10 +10,15 @@ import OtpModal from './consumer/auth/OtpModal'
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 const schema = z.object({
-  identifier: z.string().min(4, 'Enter your mobile number or Aadhaar last 4 digits'),
+  identifier: z
+    .string()
+    .min(4, 'Enter mobile number, Aadhaar number, or Aadhaar last 4 digits')
+    .max(12, 'Identifier too long')
+    .regex(/^\d+$/, 'Only digits allowed — no spaces or dashes'),
   password: z.string().min(1, 'Password is required'),
 })
 type FormValues = z.infer<typeof schema>
+
 
 // ─── Role-based redirect map ──────────────────────────────────────────────────
 const ROLE_REDIRECT: Record<string, string> = {
@@ -108,18 +113,23 @@ const LoginPage: React.FC = () => {
             {/* Identifier */}
             <div className="space-y-1">
               <label className="text-xs font-semibold text-white/60 uppercase tracking-wide">
-                Mobile Number or Aadhaar Last 4 Digits
+                Mobile Number or Aadhaar Number
               </label>
               <input
                 className={inputCls(!!errors.identifier)}
-                placeholder="e.g. 9876543210 or last 4 of Aadhaar"
+                placeholder="10-digit mobile or 12-digit Aadhaar number"
                 inputMode="numeric"
+                maxLength={12}
                 {...register('identifier')}
               />
+              <p className="text-white/40 text-[11px] mt-1">
+                Accepted: 10-digit mobile · 12-digit Aadhaar · Aadhaar last 4 digits
+              </p>
               {errors.identifier && (
                 <p className="text-red-400 text-xs">{errors.identifier.message}</p>
               )}
             </div>
+
 
             {/* Password */}
             <div className="space-y-1">
@@ -201,6 +211,14 @@ const LoginPage: React.FC = () => {
             <span className="font-mono font-semibold text-white">Demo@1234pass</span>
           </p>
         </div>
+
+        {/* Portal links */}
+        <div className="mt-4 flex justify-center gap-4 text-xs text-white/30">
+          <Link to="/login/admin" className="hover:text-white/60 transition-colors">Admin Portal</Link>
+          <span>·</span>
+          <Link to="/login/shop" className="hover:text-white/60 transition-colors">Shop Portal</Link>
+        </div>
+
       </div>
     </div>
   )

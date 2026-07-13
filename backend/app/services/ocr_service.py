@@ -65,6 +65,8 @@ def _mock_response() -> RegisterExtractResponse:
         aadhaar_number=masked,
         address=random.choice(_MOCK_ADDRESSES),
         district=random.choice(_MOCK_DISTRICTS),
+        source="OCR",
+        raw_text="[mock — Tesseract not installed]",
         confidence=OcrConfidence(
             full_name=82.0,
             dob=88.0,
@@ -247,6 +249,8 @@ def extract_from_image(image_bytes: bytes) -> RegisterExtractResponse:
         aadhaar_number=masked_aadhaar,
         address=address,
         district=None,
+        source="OCR",
+        raw_text=text[:2000] if text else None,   # Truncate for safety
         confidence=OcrConfidence(
             full_name=name_conf,
             dob=dob_conf,

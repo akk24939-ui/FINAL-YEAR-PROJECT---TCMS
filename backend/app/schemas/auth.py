@@ -14,10 +14,19 @@ class OtpVerify(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    """Login can use mobile number OR the masked Aadhaar (last 4)."""
+    """Login identifier accepts three formats:
+      - 10-digit mobile number (e.g. '9876543210')
+      - Full 12-digit mock Aadhaar number (e.g. '234567890123')
+      - Aadhaar last-4 digits only (e.g. '0123') — legacy, still supported
+    """
     identifier: str = Field(
-        ..., 
-        description="Either 10-digit mobile number or Aadhaar last 4 digits (e.g., '1234')"
+        ...,
+        min_length=4,
+        max_length=12,
+        description=(
+            "10-digit mobile number, full 12-digit Aadhaar, "
+            "or Aadhaar last-4 digits"
+        ),
     )
     password: str = Field(...)
 

@@ -54,6 +54,10 @@ class AuditEventType(str, enum.Enum):
     # Admin — global config
     ADMIN_UPDATED_GLOBAL_LIMITS = "admin_updated_global_limits"
     ADMIN_UPDATED_CONFIG = "admin_updated_config"
+    # Admin — operator password management
+    ADMIN_TEMP_PASSWORD_ISSUED = "admin_temp_password_issued"
+    OPERATOR_PASSWORD_CHANGED = "operator_password_changed"
+    SHOP_LOGIN_MUST_CHANGE = "shop_login_must_change"
     # Token
     TOKEN_REVOKED = "token_revoked"
 

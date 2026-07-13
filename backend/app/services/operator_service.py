@@ -20,7 +20,7 @@ from app.models.restriction import SelfRestriction
 from app.models.shop import Shop
 from app.models.system_config import SystemConfig
 from app.models.user import User
-from app.core.security import verify_qr_payload
+from app.core.security import verify_qr_payload, decrypt_aadhaar, mask_aadhaar
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -139,15 +139,23 @@ def lookup_consumer_by_qr(qr_payload_str: str, db: Session) -> dict:
     if not user or not user.is_active:
         raise HTTPException(status_code=403, detail="Consumer account is inactive.")
 
-    # Check self-restriction
+    # Check self-restriction (is_locked=True AND lock has not expired)
+    now_utc = datetime.now(timezone.utc)
     active_restriction = db.query(SelfRestriction).filter(
         SelfRestriction.user_id == consumer_user_id,
-        SelfRestriction.is_active == True,
+        SelfRestriction.is_locked == True,
+    ).filter(
+        # locked_until is NULL (permanent) OR still in the future
+        (SelfRestriction.locked_until == None) | (SelfRestriction.locked_until > now_utc)
     ).first()
     if active_restriction:
+        until_str = (
+            active_restriction.locked_until.strftime("%d %b %Y")
+            if active_restriction.locked_until else "further notice"
+        )
         raise HTTPException(
             status_code=403,
-            detail="Consumer has placed a self-restriction. Purchase blocked until restriction expires."
+            detail=f"Consumer has a self-restriction active until {until_str}. Purchase blocked."
         )
 
     # Today's consumption
@@ -165,7 +173,10 @@ def lookup_consumer_by_qr(qr_payload_str: str, db: Session) -> dict:
     return {
         "consumer_user_id": consumer_user_id,
         "full_name": user.full_name,
-        "aadhaar_masked": profile.aadhaar_masked,
+        "aadhaar_masked": (
+            mask_aadhaar(decrypt_aadhaar(profile.aadhaar_encrypted))
+            if profile and profile.aadhaar_encrypted else None
+        ),
         "district": profile.district,
         "is_teetotaler": profile.is_teetotaler,
         "daily_limit_ml": daily_limit_ml,
@@ -220,12 +231,16 @@ def record_purchase(
         raise HTTPException(status_code=403, detail="Consumer is a Teetotaler. Purchase blocked.")
 
     # Self-restriction block
+    now_utc = datetime.now(timezone.utc)
     active_restriction = db.query(SelfRestriction).filter(
         SelfRestriction.user_id == consumer_user_id,
-        SelfRestriction.is_active == True,
+        SelfRestriction.is_locked == True,
+    ).filter(
+        (SelfRestriction.locked_until == None) | (SelfRestriction.locked_until > now_utc)
     ).first()
     if active_restriction:
         raise HTTPException(status_code=403, detail="Consumer has a self-restriction active. Purchase blocked.")
+
 
     # Get limits
     limits_row = db.query(ConsumerLimits).filter(ConsumerLimits.user_id == consumer_user_id).first()

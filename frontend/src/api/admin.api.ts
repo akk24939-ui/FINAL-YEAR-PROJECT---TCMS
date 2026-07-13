@@ -20,12 +20,53 @@ adminClient.interceptors.request.use((config) => {
   return config
 })
 
+// Track in-flight refresh to prevent multiple simultaneous refresh calls
+let _refreshing = false
+let _refreshWaiters: Array<(token: string) => void> = []
+let _refreshFailWaiters: Array<(err: unknown) => void> = []
+
 adminClient.interceptors.response.use(
   (r) => r,
-  (err) => {
-    if (err.response?.status === 401) {
-      useAdminAuthStore.getState().logout()
-      window.location.href = '/admin/login'
+  async (err) => {
+    const original = err.config
+    if (err.response?.status === 401 && !original._retry) {
+      original._retry = true
+
+      if (_refreshing) {
+        // Wait for the in-flight refresh to complete
+        return new Promise((resolve, reject) => {
+          _refreshWaiters.push((token) => {
+            original.headers.Authorization = `Bearer ${token}`
+            resolve(adminClient(original))
+          })
+          _refreshFailWaiters.push(reject)
+        })
+      }
+
+      _refreshing = true
+      try {
+        const res = await axios.post(
+          '/api/v1/admin/auth/refresh',
+          {},
+          { baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:8000', withCredentials: true }
+        )
+        const newToken: string = res.data.access_token
+        useAdminAuthStore.getState().setToken(newToken)
+        _refreshWaiters.forEach(cb => cb(newToken))
+        _refreshWaiters = []
+        _refreshFailWaiters = []
+        _refreshing = false
+        original.headers.Authorization = `Bearer ${newToken}`
+        return adminClient(original)
+      } catch (refreshErr) {
+        _refreshFailWaiters.forEach(cb => cb(refreshErr))
+        _refreshWaiters = []
+        _refreshFailWaiters = []
+        _refreshing = false
+        useAdminAuthStore.getState().logout()
+        window.location.href = '/login/admin'
+        return Promise.reject(refreshErr)
+      }
     }
     return Promise.reject(err)
   }
@@ -51,6 +92,8 @@ export const adminShopsApi = {
     adminClient.post<CreateShopResponse>('/api/v1/admin/shops', data),
   resetPin: (shopId: string) =>
     adminClient.post<ResetPinResponse>(`/api/v1/admin/shops/${shopId}/reset-pin`),
+  tempPassword: (shopId: string) =>
+    adminClient.post(`/api/v1/admin/shops/${shopId}/temp-password`),
   suspend: (shopId: string, reason: string) =>
     adminClient.post(`/api/v1/admin/shops/${shopId}/suspend`, { reason }),
   reactivate: (shopId: string) =>

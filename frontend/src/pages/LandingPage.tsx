@@ -513,7 +513,12 @@ const LandingPage: React.FC = () => {
             className="rounded-2xl p-8 border"
             style={{ background: cardBg, borderColor: cardBorder, boxShadow: cardShadow }}
           >
-            <p className="text-sm font-bold mb-4" style={{ color: '#F97316' }}>🛠️ Powered By</p>
+            <div className="mb-6">
+              <p className="font-bold text-lg mb-1" style={{ color: textPrimary }}>Designed & Developed By</p>
+              <p className="font-black text-xl tracking-wide" style={{ color: '#F97316' }}>Akash KK & Dinesh SM</p>
+            </div>
+            
+            <p className="text-sm font-bold mb-4 mt-6 pt-6 border-t" style={{ borderColor: isDark ? '#374151' : '#E5E7EB', color: '#F97316' }}>🛠️ Powered By</p>
             <div className="flex flex-wrap justify-center gap-2 mb-6">
               {['React 18', 'TypeScript', 'FastAPI', 'PostgreSQL 15', 'SQLAlchemy 2.0', 'JWT Auth', 'bcrypt', 'Docker', 'Tailwind CSS'].map(tech => (
                 <span

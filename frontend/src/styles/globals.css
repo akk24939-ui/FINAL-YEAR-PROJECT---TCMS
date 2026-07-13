@@ -2,6 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Design tokens — Light mode (default) ─────────────────────────────────── */
 :root {
   --primary: #1A3C34;
   --primary-light: #2D6A4F;
@@ -10,9 +11,31 @@
   --secondary-light: #FB923C;
   --accent-gold: #D4AF37;
   --text-light: #F0FDF4;
-  --text-dark: #1A1A1A;
-  --glass-bg: rgba(26, 60, 52, 0.15);
-  --glass-border: rgba(249, 115, 22, 0.2);
+  --text-dark: #111827;
+  --glass-bg: rgba(26, 60, 52, 0.08);
+  --glass-border: rgba(249, 115, 22, 0.15);
+
+  /* Surface tokens */
+  --surface-bg:      #f8fafc;
+  --surface-card:    #ffffff;
+  --surface-border:  #e5e7eb;
+  --surface-hover:   #f1f5f9;
+  --surface-input:   #ffffff;
+  --text-primary:    #111827;
+  --text-secondary:  #6b7280;
+  --text-muted:      #9ca3af;
+}
+
+/* ── Design tokens — Dark mode ───────────────────────────────────────────────── */
+.dark {
+  --surface-bg:      #030712;
+  --surface-card:    #111827;
+  --surface-border:  #1f2937;
+  --surface-hover:   #1f2937;
+  --surface-input:   #1f2937;
+  --text-primary:    #f9fafb;
+  --text-secondary:  #9ca3af;
+  --text-muted:      #4b5563;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }

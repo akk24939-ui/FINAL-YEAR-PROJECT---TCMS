@@ -63,6 +63,40 @@ def _generate_pin() -> str:
     return f"{secrets.randbelow(900_000) + 100_000:06d}"
 
 
+PASSWORD_POLICY = (
+    r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};:\'",./<>?]).{8,}$'
+)
+
+
+def _generate_temp_password() -> str:
+    """Generate a cryptographically secure 16-character temporary password.
+
+    Guaranteed to meet policy: upper + lower + digit + symbol.
+    Never stored in plaintext — caller must hash and discard immediately.
+    """
+    alphabet_lower = string.ascii_lowercase
+    alphabet_upper = string.ascii_uppercase
+    digits = string.digits
+    symbols = '!@#$%&*'
+    all_chars = alphabet_lower + alphabet_upper + digits + symbols
+
+    # Guarantee at least one of each required class
+    password_chars = [
+        secrets.choice(alphabet_upper),
+        secrets.choice(alphabet_lower),
+        secrets.choice(digits),
+        secrets.choice(symbols),
+    ]
+    password_chars += [secrets.choice(all_chars) for _ in range(12)]  # 16 total
+
+    # Shuffle to avoid predictable position of required chars
+    shuffled = list(password_chars)
+    for i in range(len(shuffled) - 1, 0, -1):
+        j = secrets.randbelow(i + 1)
+        shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+    return ''.join(shuffled)
+
+
 def _generate_shop_code(district: str, db: Session) -> str:
     """Generate unique shop code TSM-{DISTRICT3}-{NNNNN}."""
     prefix = district[:3].upper()
@@ -115,15 +149,30 @@ def create_shop(
     license_number: Optional[str],
     operator_name: str,
     operator_phone: str,
+    initial_password: str,
     admin: User,
     db: Session,
     ip_address: str = "unknown",
 ) -> tuple[Shop, User, str]:
     """
     Create shop + operator User account.
-    Returns (shop, operator_user, plaintext_pin) — caller shows PIN once then discards.
+
+    Args:
+        initial_password: Admin-set password for the operator. Stored hashed.
+                          must_change_password is set True so the operator is
+                          forced to change it on first login.
+
+    Returns (shop, operator_user, raw_pin) — PIN still used for quick POS login.
     """
-    # Generate credentials
+    # Validate password policy
+    import re
+    if not re.match(PASSWORD_POLICY, initial_password):
+        raise HTTPException(
+            status_code=422,
+            detail="Password must be at least 8 characters with upper, lower, digit, and symbol.",
+        )
+
+    # Generate PIN for POS quick-login
     shop_code = _generate_shop_code(district, db)
     raw_pin = _generate_pin()
     pin_hash = hash_password(raw_pin)
@@ -136,12 +185,12 @@ def create_shop(
         id=uuid.uuid4(),
         email=operator_email,
         full_name=operator_name,
-        password_hash=hash_password(secrets.token_hex(32)),  # Unusable password — PIN-only auth
+        password_hash=hash_password(initial_password),  # Admin-set, must change on first login
         pin_hash=pin_hash,
         role=UserRole.OPERATOR,
         is_active=True,
         is_verified=True,
-        must_change_password=False,
+        must_change_password=True,   # Force password change on first login
         last_pin_rotation=datetime.now(timezone.utc),
     )
     db.add(operator_user)
@@ -166,8 +215,8 @@ def create_shop(
     _audit(
         db, AuditEventType.ADMIN_CREATED_SHOP, actor=admin,
         target_user_id=operator_user.id,
-        description=f"Created shop {shop_code} — {name} ({district})",
-        metadata={"shop_code": shop_code, "district": district},
+        description=f"Created shop {shop_code} — {name} ({district}) with admin-set initial password",
+        metadata={"shop_code": shop_code, "district": district, "must_change_password": True},
         ip_address=ip_address,
     )
     db.commit()
@@ -210,6 +259,115 @@ def reset_shop_pin(
     return shop, raw_pin
 
 
+def issue_temp_password(
+    shop_id: uuid.UUID,
+    admin: User,
+    db: Session,
+    ip_address: str = "unknown",
+) -> tuple[User, str]:
+    """Issue a temporary password for a shop operator (Feature 3).
+
+    Security contract:
+    - A cryptographically-secure 16-char password is generated.
+    - It is hashed with bcrypt before storing — plaintext is NEVER persisted.
+    - `must_change_password = True` is set — operator MUST change on next login.
+    - `otp_expires_at` is repurposed as temp_password_expires_at (24h window).
+    - The plaintext is returned ONCE to the caller and then discarded.
+    - This action is written to audit_logs (admin_id, operator_id, IP, timestamp).
+
+    Returns: (operator_user, plaintext_temp_password)
+    """
+    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+
+    operator = db.query(User).filter(User.id == shop.operator_id).first()
+    if not operator:
+        raise HTTPException(status_code=404, detail="Shop operator account not found")
+
+    if not operator.is_active:
+        raise HTTPException(status_code=400, detail="Operator account is deactivated")
+
+    # Generate temp password — plaintext only lives in this stack frame
+    plaintext = _generate_temp_password()
+    operator.password_hash = hash_password(plaintext)
+    operator.must_change_password = True
+    operator.failed_login_attempts = 0
+    operator.locked_until = None
+    # Reuse otp_expires_at as a temp_password expiry (24-hour window)
+    operator.otp_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+
+    _audit(
+        db,
+        AuditEventType.ADMIN_TEMP_PASSWORD_ISSUED,
+        actor=admin,
+        target_user_id=operator.id,
+        description=(
+            f"Admin issued temporary password for shop operator of {shop.shop_code}. "
+            f"Expires in 24 hours. Operator must change on next login."
+        ),
+        metadata={"shop_code": shop.shop_code, "shop_id": str(shop_id)},
+        ip_address=ip_address,
+    )
+    db.commit()
+    db.refresh(operator)
+    # Return plaintext ONCE — never log, never store
+    return operator, plaintext
+
+
+def change_operator_password(
+    shop_id: uuid.UUID,
+    operator_user: User,
+    current_password: str,
+    new_password: str,
+    db: Session,
+    ip_address: str = "unknown",
+) -> None:
+    """Allow an operator to change their own password (Feature 2).
+
+    Requires:
+    - current_password matches stored hash
+    - new_password meets policy (min 8 chars, upper+lower+digit+symbol)
+    - new_password != current_password
+
+    Clears must_change_password flag on success.
+    """
+    import re
+    from app.core.security import verify_password
+
+    if not verify_password(current_password, operator_user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+
+    if not re.match(PASSWORD_POLICY, new_password):
+        raise HTTPException(
+            status_code=422,
+            detail="New password must be at least 8 characters with uppercase, lowercase, digit, and symbol.",
+        )
+
+    if verify_password(new_password, operator_user.password_hash):
+        raise HTTPException(
+            status_code=422,
+            detail="New password must be different from your current password.",
+        )
+
+    operator_user.password_hash = hash_password(new_password)
+    operator_user.must_change_password = False
+    operator_user.otp_expires_at = None  # Clear temp password expiry
+    operator_user.token_version = (operator_user.token_version or 0) + 1  # Invalidate old tokens
+
+    _audit(
+        db,
+        AuditEventType.OPERATOR_PASSWORD_CHANGED,
+        actor=operator_user,
+        target_user_id=operator_user.id,
+        description=f"Operator changed their password for shop {shop_id}",
+        metadata={"shop_id": str(shop_id)},
+        ip_address=ip_address,
+    )
+    db.commit()
+
+
+
 def suspend_shop(
     shop_id: uuid.UUID,
     reason: str,
@@ -217,6 +375,7 @@ def suspend_shop(
     db: Session,
     ip_address: str = "unknown",
 ) -> Shop:
+
     shop = db.query(Shop).filter(Shop.id == shop_id).first()
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")

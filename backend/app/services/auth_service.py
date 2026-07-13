@@ -176,7 +176,12 @@ def login_consumer(
     db: Session,
     ip: str,
 ) -> dict:
-    """Authenticate by mobile number or Aadhaar last-4.
+    """Authenticate by mobile number, full Aadhaar number, or Aadhaar last-4.
+
+    Accepted identifier formats:
+      - 10 digits  → mobile number (direct DB lookup)
+      - 12 digits  → full mock Aadhaar number (decrypt-and-compare all profiles)
+      - 4  digits  → Aadhaar last-4 (decrypt-and-compare last 4 chars)
 
     On any failure: increment failed_login_attempts, lock if >= 5, and return
     a GENERIC error (never reveal which field was wrong).
@@ -186,15 +191,44 @@ def login_consumer(
         detail="Invalid credentials",
     )
 
+    # Reject clearly malformed identifiers early
+    if not identifier.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Identifier must contain digits only (mobile number or Aadhaar).",
+        )
+    if len(identifier) not in (4, 10, 12):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Enter a 10-digit mobile number, 12-digit Aadhaar, or Aadhaar last 4 digits.",
+        )
+
     # ── Locate user ────────────────────────────────────────────────────────────
     user: Optional[User] = None
 
-    # Try mobile number first (exact match)
-    if len(identifier) == 10 and identifier.isdigit():
+    # ── Mode 1: 10-digit mobile number (fast direct lookup) ────────────────────
+    if len(identifier) == 10:
         user = db.query(User).filter(User.mobile_number == identifier).first()
 
-    # Try Aadhaar last-4 (timing-safe: always iterate all profiles)
-    if user is None and len(identifier) == 4 and identifier.isdigit():
+    # ── Mode 2: Full 12-digit Aadhaar (decrypt-and-compare, timing-safe) ───────
+    elif len(identifier) == 12:
+        profiles = (
+            db.query(ConsumerProfile)
+            .join(User, ConsumerProfile.user_id == User.id)
+            .filter(User.is_active == True)  # noqa: E712
+            .all()
+        )
+        for profile in profiles:
+            try:
+                raw = decrypt_aadhaar(profile.aadhaar_encrypted)
+                if raw == identifier:
+                    user = db.query(User).filter(User.id == profile.user_id).first()
+                    break
+            except Exception:
+                continue
+
+    # ── Mode 3: Aadhaar last-4 digits (legacy, timing-safe) ───────────────────
+    elif len(identifier) == 4:
         profiles = (
             db.query(ConsumerProfile)
             .join(User, ConsumerProfile.user_id == User.id)

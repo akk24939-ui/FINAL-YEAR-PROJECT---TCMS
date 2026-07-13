@@ -24,14 +24,18 @@ const RestrictionsPage       = lazy(() => import('./pages/consumer/restrictions/
 const NotificationsPage      = lazy(() => import('./pages/consumer/notifications/NotificationsPage'))
 const ReportPage             = lazy(() => import('./pages/consumer/report/ReportPage'))
 
-// ── Lazy-loaded pages — Admin ─────────────────────────────────────────────────
+// ── Lazy-loaded pages — Auth portals ─────────────────────────────────────────
+const AdminLoginPageNew      = lazy(() => import('./pages/login/AdminLoginPage'))
+const ShopLoginPageNew       = lazy(() => import('./pages/login/ShopLoginPage'))
 const AdminLoginPage         = lazy(() => import('./pages/admin/AdminLoginPage'))
+const PortalLoginPage        = lazy(() => import('./pages/PortalLoginPage'))
 
 // ── Lazy-loaded pages — Operator ──────────────────────────────────────────────
 const ShopLoginPage          = lazy(() => import('./pages/operator/ShopLoginPage'))
 const ShopDashboard          = lazy(() => import('./pages/operator/ShopDashboard'))
 const ScanAndSellPage        = lazy(() => import('./pages/operator/ScanAndSellPage'))
 const ShopHistoryPage        = lazy(() => import('./pages/operator/ShopHistoryPage'))
+const ShopChangePasswordPage = lazy(() => import('./pages/operator/ShopChangePasswordPage'))
 const OverviewPage           = lazy(() => import('./pages/admin/OverviewPage'))
 const ShopsPage              = lazy(() => import('./pages/admin/ShopsPage'))
 const DoctorsPage            = lazy(() => import('./pages/admin/DoctorsPage'))
@@ -51,14 +55,14 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; role?: string }> = (
 // ── Protected Route — Admin ───────────────────────────────────────────────────
 const AdminProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated } = useAdminAuthStore()
-  if (!isAuthenticated) return <Navigate to="/admin/login" replace />
+  if (!isAuthenticated) return <Navigate to="/login/admin" replace />
   return <>{children}</>
 }
 
 // ── Protected Route — Operator ────────────────────────────────────────────────
 const OperatorProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated } = useOperatorAuthStore()
-  if (!isAuthenticated) return <Navigate to="/shop/login" replace />
+  if (!isAuthenticated) return <Navigate to="/login/shop" replace />
   return <>{children}</>
 }
 
@@ -82,11 +86,19 @@ const App: React.FC = () => (
         <Route path="/login"    element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
 
-        {/* ── Admin portal login (public) ───────────────────────────────── */}
-        <Route path="/admin/login" element={<AdminLoginPage />} />
+        {/* ── Separate portal login pages (Feature 4) ───────────────────── */}
+        <Route path="/login/admin" element={<AdminLoginPageNew />} />
+        <Route path="/login/shop"  element={<ShopLoginPageNew />} />
 
-        {/* ── Shop operator login (public) ─────────────────────────────── */}
-        <Route path="/shop/login" element={<ShopLoginPage />} />
+        {/* ── Forced password change — accessible even without full auth ── */}
+        <Route path="/shop/change-password" element={<ShopChangePasswordPage />} />
+
+        {/* ── Unified portal login (kept for /portal/login bookmark compat) ── */}
+        <Route path="/portal/login" element={<PortalLoginPage />} />
+
+        {/* ── Legacy redirects → new dedicated pages ───────────────────────── */}
+        <Route path="/admin/login" element={<Navigate to="/login/admin" replace />} />
+        <Route path="/shop/login"  element={<Navigate to="/login/shop" replace />} />
 
         {/* ── Admin portal (protected, role=ADMIN) ─────────────────────── */}
         <Route

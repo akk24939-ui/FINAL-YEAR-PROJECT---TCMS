@@ -1,9 +1,13 @@
-"""Admin shops endpoints — CRUD, PIN reset, suspend/reactivate."""
+"""Admin shops endpoints — CRUD, PIN reset, temp password, suspend/reactivate.
+
+Feature 2: Admin sets initial permanent password when creating a shop operator.
+Feature 3: Admin can issue a temporary password shown once, forces change on next login.
+"""
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -21,6 +25,15 @@ class CreateShopRequest(BaseModel):
     license_number: Optional[str] = None
     operator_name: str
     operator_phone: str
+    initial_password: str = Field(
+        ...,
+        min_length=8,
+        description=(
+            "Permanent initial password set by admin. "
+            "Operator will be forced to change it on first login. "
+            "Policy: min 8 chars, upper + lower + digit + symbol."
+        ),
+    )
 
 
 class SuspendShopRequest(BaseModel):
@@ -64,7 +77,7 @@ def list_shops(
     return {"total": total, "shops": [_serialize_shop(s) for s in shops]}
 
 
-@router.post("/shops", summary="Create a new shop + operator account")
+@router.post("/shops", summary="Create a new shop + operator account (Feature 2)")
 def create_shop(
     body: CreateShopRequest,
     request: Request,
@@ -72,6 +85,11 @@ def create_shop(
     db: Session = Depends(get_db),
     ip: str = Depends(get_client_ip),
 ):
+    """Create shop and operator account.
+
+    The admin sets an initial permanent password. The operator is required to
+    change it on first login (must_change_password=True is set automatically).
+    """
     shop, operator, raw_pin = admin_service.create_shop(
         name=body.name,
         district=body.district,
@@ -79,6 +97,7 @@ def create_shop(
         license_number=body.license_number,
         operator_name=body.operator_name,
         operator_phone=body.operator_phone,
+        initial_password=body.initial_password,
         admin=current_user,
         db=db,
         ip_address=ip,
@@ -86,9 +105,14 @@ def create_shop(
     return {
         "shop": _serialize_shop(shop),
         "operator_email": operator.email,
-        # PIN shown ONCE — never retrievable again
+        "shop_code": shop.shop_code,
+        # PIN still issued for POS quick-login (shown once)
         "initial_pin": raw_pin,
-        "message": "Shop created. Save the PIN — it will not be shown again.",
+        "must_change_password": True,
+        "message": (
+            "Shop created. The operator must change their password on first login. "
+            "Save the PIN — it will not be shown again."
+        ),
     }
 
 
@@ -104,6 +128,45 @@ def reset_pin(
         "shop_code": shop.shop_code,
         "new_pin": raw_pin,
         "message": "PIN reset. Save the new PIN — it will not be shown again.",
+    }
+
+
+@router.post(
+    "/shops/{shop_id}/temp-password",
+    summary="Issue temporary password for shop operator (Feature 3)",
+)
+def issue_temp_password(
+    shop_id: uuid.UUID,
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+    ip: str = Depends(get_client_ip),
+):
+    """Issue a one-time temporary password to a shop operator.
+
+    Security guarantees:
+    - Generated with secrets module (cryptographically secure).
+    - Hashed with bcrypt before storing — plaintext NEVER persisted.
+    - Returned ONCE in this response — not logged, not emailable.
+    - Operator must change password on next login (must_change_password=True).
+    - Expires in 24 hours if unused (tracked via otp_expires_at column).
+    - Audit log entry written: admin ID, operator ID, IP, timestamp.
+    """
+    operator, plaintext = admin_service.issue_temp_password(
+        shop_id=shop_id,
+        admin=current_user,
+        db=db,
+        ip_address=ip,
+    )
+    return {
+        # Plaintext shown ONCE — admin must hand this to operator securely
+        "temp_password": plaintext,
+        "expires_in_hours": 24,
+        "must_change_password": True,
+        "operator_name": operator.full_name,
+        "message": (
+            "Temporary password issued. Show this to the operator securely — "
+            "it will NOT be shown again. Operator must change it within 24 hours."
+        ),
     }
 
 

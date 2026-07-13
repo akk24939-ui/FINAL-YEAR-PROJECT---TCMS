@@ -35,7 +35,7 @@ const AdminLayout: React.FC = () => {
   const handleLogout = async () => {
     try { await adminAuthApi.logout() } catch { /* ignore */ }
     logout()
-    navigate('/admin/login', { replace: true })
+    navigate('/portal/login', { replace: true })
   }
 
   const initials = admin?.full_name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) ?? 'GA'
@@ -67,7 +67,7 @@ const AdminLayout: React.FC = () => {
               `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all group ${
                 isActive
                   ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/30'
-                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white'
+                  : 'text-gray-600 dark:text-gray-400 hover:bg-blue-50 dark:hover:bg-gray-800 hover:text-blue-700 dark:hover:text-white'
               } ${collapsed ? 'justify-center' : ''}`
             }
             title={collapsed ? item.label : undefined}

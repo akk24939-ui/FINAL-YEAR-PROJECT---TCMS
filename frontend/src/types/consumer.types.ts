@@ -18,6 +18,8 @@ export interface OcrConfidence {
   gender: number
   aadhaar_number: number
   address: number
+  email?: number
+  mobile_number?: number
 }
 
 export interface OcrExtractResponse {
@@ -27,6 +29,10 @@ export interface OcrExtractResponse {
   aadhaar_number?: string
   address?: string
   district?: string
+  email?: string
+  mobile_number?: string
+  raw_text?: string
+  source?: 'OCR' | 'MANUAL'
   confidence: OcrConfidence
 }
 

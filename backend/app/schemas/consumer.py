@@ -24,6 +24,10 @@ class RegisterExtractResponse(BaseModel):
     aadhaar_number: Optional[str] = None
     address: Optional[str] = None
     district: Optional[str] = None
+    email: Optional[str] = None
+    mobile_number: Optional[str] = None
+    raw_text: Optional[str] = None
+    source: Optional[str] = "OCR"   # 'OCR' or 'MANUAL' — set by endpoint
     confidence: OcrConfidence
 
 

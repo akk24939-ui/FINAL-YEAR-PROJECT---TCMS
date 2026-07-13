@@ -161,6 +161,8 @@ def shop_login(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
+        "must_change_password": operator.must_change_password,
+        "_operator_obj": operator,  # Used by endpoint to enforce expiry — stripped before response
         "shop": {
             "id": str(shop.id),
             "shop_code": shop.shop_code,

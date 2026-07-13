@@ -4,7 +4,7 @@
  */
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, KeyRound, PauseCircle, PlayCircle, Search, CheckCircle2, XCircle, AlertTriangle, X, Copy } from 'lucide-react'
+import { Plus, KeyRound, PauseCircle, PlayCircle, Search, CheckCircle2, XCircle, AlertTriangle, X, Copy, Eye, EyeOff, ShieldAlert } from 'lucide-react'
 import { adminShopsApi } from '../../api/admin.api'
 import type { ShopRecord, CreateShopPayload } from '../../types/admin.types'
 
@@ -44,8 +44,12 @@ const PinRevealModal: React.FC<{ pin: string; shopCode: string; onClose: () => v
 
 const CreateShopModal: React.FC<{ onClose: () => void; onCreated: (pin: string, code: string) => void }> = ({ onClose, onCreated }) => {
   const qc = useQueryClient()
-  const [form, setForm] = useState<CreateShopPayload>({ name: '', district: '', address: '', operator_name: '', operator_phone: '', license_number: '' })
+  const [form, setForm] = useState<CreateShopPayload>({
+    name: '', district: '', address: '', operator_name: '', operator_phone: '',
+    license_number: '', initial_password: '',
+  })
   const [error, setError] = useState('')
+  const [showPwd, setShowPwd] = useState(false)
   const mutation = useMutation({
     mutationFn: () => adminShopsApi.create(form),
     onSuccess: (res) => {
@@ -72,6 +76,31 @@ const CreateShopModal: React.FC<{ onClose: () => void; onCreated: (pin: string, 
               <input className={inputCls} value={form[k] ?? ''} onChange={e => set(k, e.target.value)} required={k !== 'license_number'} />
             </div>
           ))}
+
+          {/* Initial Password — Feature 2 */}
+          <div>
+            <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 block mb-1">
+              Initial Password <span className="text-amber-500">(operator must change on first login)</span>
+            </label>
+            <div className="relative">
+              <input
+                type={showPwd ? 'text' : 'password'}
+                className={inputCls}
+                placeholder="Min 8 chars, upper+lower+digit+symbol"
+                value={form.initial_password}
+                onChange={e => set('initial_password', e.target.value)}
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPwd(!showPwd)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-1">Policy: 8+ chars, uppercase, lowercase, number, symbol (!@#$%…)</p>
+          </div>
         </div>
         {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
         <div className="flex gap-2 mt-5">
@@ -93,6 +122,7 @@ const ShopsPage: React.FC = () => {
   const [filterActive, setFilterActive] = useState<boolean | undefined>(undefined)
   const [showCreate, setShowCreate] = useState(false)
   const [pinReveal, setPinReveal] = useState<{ pin: string; code: string } | null>(null)
+  const [tempReveal, setTempReveal] = useState<{ password: string; operatorName: string } | null>(null)
   const [suspendTarget, setSuspendTarget] = useState<ShopRecord | null>(null)
   const [suspendReason, setSuspendReason] = useState('')
 
@@ -106,6 +136,16 @@ const ShopsPage: React.FC = () => {
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['admin-shops'] })
       setPinReveal({ pin: res.data.new_pin, code: res.data.shop_code })
+    },
+  })
+
+  const issueTempPwd = useMutation({
+    mutationFn: (shopId: string) => adminShopsApi.tempPassword(shopId),
+    onSuccess: (res) => {
+      setTempReveal({ password: res.data.temp_password, operatorName: res.data.operator_name })
+    },
+    onError: (err: unknown) => {
+      alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Failed to issue temp password')
     },
   })
 
@@ -130,7 +170,44 @@ const ShopsPage: React.FC = () => {
       {pinReveal && <PinRevealModal pin={pinReveal.pin} shopCode={pinReveal.code} onClose={() => setPinReveal(null)} />}
       {showCreate && <CreateShopModal onClose={() => setShowCreate(false)} onCreated={(pin, code) => { setShowCreate(false); setPinReveal({ pin, code }) }} />}
 
+      {/* Temp password reveal — shown ONCE */}
+      {tempReveal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+            <div className="flex items-center gap-2 mb-4">
+              <ShieldAlert className="w-5 h-5 text-amber-500 flex-shrink-0" />
+              <h3 className="font-black text-gray-900 dark:text-white">Temporary Password Issued</h3>
+            </div>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+              For operator: <strong className="text-gray-900 dark:text-white">{tempReveal.operatorName}</strong>
+            </p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">
+              ⚠ This password is shown ONCE and will NOT be retrievable. The operator must change it within 24 hours.
+            </p>
+            <div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/40 rounded-xl px-4 py-3">
+              <code className="font-mono text-base font-bold text-amber-900 dark:text-amber-300 flex-1 break-all">
+                {tempReveal.password}
+              </code>
+              <button
+                onClick={() => navigator.clipboard.writeText(tempReveal.password)}
+                className="text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200 transition-colors"
+                title="Copy to clipboard"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
+            </div>
+            <button
+              onClick={() => setTempReveal(null)}
+              className="w-full mt-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-white text-sm font-bold"
+            >
+              I have noted this password
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Suspend confirm */}
+
       {suspendTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
           <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
@@ -214,10 +291,19 @@ const ShopsPage: React.FC = () => {
                         <button onClick={() => resetPin.mutate(shop.id)} title="Reset PIN" className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 text-amber-600 hover:bg-amber-100 transition">
                           <KeyRound className="w-3.5 h-3.5" />
                         </button>
+                        <button
+                          onClick={() => issueTempPwd.mutate(shop.id)}
+                          title="Issue Temporary Password (forgotten password)"
+                          className="p-1.5 rounded-lg bg-purple-50 dark:bg-purple-900/20 text-purple-600 hover:bg-purple-100 transition"
+                          disabled={issueTempPwd.isPending}
+                        >
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                        </button>
                         {shop.is_active
                           ? <button onClick={() => setSuspendTarget(shop)} title="Suspend" className="p-1.5 rounded-lg bg-orange-50 dark:bg-orange-900/20 text-orange-600 hover:bg-orange-100 transition"><PauseCircle className="w-3.5 h-3.5" /></button>
                           : <button onClick={() => reactivate.mutate(shop.id)} title="Reactivate" className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 hover:bg-emerald-100 transition"><PlayCircle className="w-3.5 h-3.5" /></button>}
                       </div>
+
                     </td>
                   </tr>
                 )

@@ -23,12 +23,45 @@ operatorClient.interceptors.request.use((config) => {
   return config
 })
 
+let _opRefreshing = false
+let _opWaiters: Array<(token: string) => void> = []
+let _opFailWaiters: Array<(err: unknown) => void> = []
+
 operatorClient.interceptors.response.use(
   (r) => r,
-  (err) => {
-    if (err.response?.status === 401) {
-      useOperatorAuthStore.getState().logout()
-      window.location.href = '/shop/login'
+  async (err) => {
+    const original = err.config
+    if (err.response?.status === 401 && !original._retry) {
+      original._retry = true
+      if (_opRefreshing) {
+        return new Promise((resolve, reject) => {
+          _opWaiters.push((token) => {
+            original.headers.Authorization = `Bearer ${token}`
+            resolve(operatorClient(original))
+          })
+          _opFailWaiters.push(reject)
+        })
+      }
+      _opRefreshing = true
+      try {
+        const res = await axios.post(
+          '/api/v1/shop/auth/refresh',
+          {},
+          { baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:8000', withCredentials: true }
+        )
+        const newToken: string = res.data.access_token
+        useOperatorAuthStore.getState().setToken(newToken)
+        _opWaiters.forEach(cb => cb(newToken))
+        _opWaiters = []; _opFailWaiters = []; _opRefreshing = false
+        original.headers.Authorization = `Bearer ${newToken}`
+        return operatorClient(original)
+      } catch (refreshErr) {
+        _opFailWaiters.forEach(cb => cb(refreshErr))
+        _opWaiters = []; _opFailWaiters = []; _opRefreshing = false
+        useOperatorAuthStore.getState().logout()
+        window.location.href = '/login/shop'
+        return Promise.reject(refreshErr)
+      }
     }
     return Promise.reject(err)
   }
@@ -41,12 +74,17 @@ export const operatorAuthApi = {
       baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:8000',
       withCredentials: true,
     }),
+  changePassword: (current_password: string, new_password: string, confirm_password: string) =>
+    operatorClient.post('/api/v1/shop/auth/change-password', {
+      current_password, new_password, confirm_password,
+    }),
   logout: () =>
     axios.post('/api/v1/shop/auth/logout', {}, {
       baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:8000',
       withCredentials: true,
     }),
 }
+
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export const operatorDashboardApi = {

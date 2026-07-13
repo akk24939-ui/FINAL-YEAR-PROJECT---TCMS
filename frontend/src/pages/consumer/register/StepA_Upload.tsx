@@ -1,16 +1,17 @@
 import React, { useCallback, useRef, useState } from 'react'
-import { Upload, FileImage, X, AlertTriangle, Loader2 } from 'lucide-react'
+import { Upload, FileImage, X, AlertTriangle, Loader2, PenLine } from 'lucide-react'
 import { consumerApi } from '../../../api/consumer.api'
 import type { OcrExtractResponse } from '../../../types/consumer.types'
 
 interface Props {
   onComplete: (data: OcrExtractResponse) => void
+  onSwitchToManual?: () => void
 }
 
 const MAX_SIZE_MB = 5
 const ACCEPTED = ['image/jpeg', 'image/png', 'application/pdf']
 
-const StepA_Upload: React.FC<Props> = ({ onComplete }) => {
+const StepA_Upload: React.FC<Props> = ({ onComplete, onSwitchToManual }) => {
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
@@ -176,17 +177,22 @@ const StepA_Upload: React.FC<Props> = ({ onComplete }) => {
         ].join(' ')}
       >
         {loading ? (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Extracting details…
-          </>
+          <><Loader2 className="w-4 h-4 animate-spin" />Extracting details…</>
         ) : (
-          <>
-            <Upload className="w-4 h-4" />
-            Extract Details
-          </>
+          <><Upload className="w-4 h-4" />Extract Details</>
         )}
       </button>
+
+      {onSwitchToManual && (
+        <button
+          type="button"
+          onClick={onSwitchToManual}
+          className="w-full py-2.5 rounded-xl border border-gray-300 dark:border-white/20 text-gray-600 dark:text-white/60 hover:text-gray-900 dark:hover:text-white hover:border-gray-400 dark:hover:border-white/40 text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+        >
+          <PenLine className="w-4 h-4" />
+          Switch to Manual Entry
+        </button>
+      )}
     </div>
   )
 }
