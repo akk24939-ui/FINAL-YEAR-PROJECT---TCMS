@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, KeyRound, PauseCircle, PlayCircle, Search, CheckCircle2, XCircle, AlertTriangle, X, Copy, Eye, EyeOff, ShieldAlert } from 'lucide-react'
 import { adminShopsApi } from '../../api/admin.api'
 import type { ShopRecord, CreateShopPayload } from '../../types/admin.types'
+import { getErrorMessage } from '../../utils/getErrorMessage'
 
 // ── Modals ────────────────────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ const CreateShopModal: React.FC<{ onClose: () => void; onCreated: (pin: string, 
       onCreated(res.data.initial_pin, res.data.shop.shop_code)
     },
     onError: (err: unknown) => {
-      setError((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Failed to create shop')
+      setError(getErrorMessage(err, 'Failed to create shop'))
     },
   })
   const set = (k: keyof CreateShopPayload, v: string) => setForm(f => ({ ...f, [k]: v }))
@@ -145,7 +146,7 @@ const ShopsPage: React.FC = () => {
       setTempReveal({ password: res.data.temp_password, operatorName: res.data.operator_name })
     },
     onError: (err: unknown) => {
-      alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Failed to issue temp password')
+      alert(getErrorMessage(err, 'Failed to issue temp password'))
     },
   })
 

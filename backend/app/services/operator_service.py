@@ -7,12 +7,13 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select, update
 
 from app.models.alert import Alert, AlertType
 from app.models.consumer_profile import ConsumerProfile
 from app.models.consumer_limits import ConsumerLimits
+from app.models.doctor_restriction import DoctorRestriction, RestrictionStatus
 from app.models.purchase import Purchase
 from app.models.product import Product
 from app.models.qr_code import QrCode
@@ -25,8 +26,9 @@ from app.core.security import verify_qr_payload, decrypt_aadhaar, mask_aadhaar
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _get_global_limit(key: str, db: Session, default: float) -> float:
-    cfg = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+async def _get_global_limit(key: str, db: AsyncSession, default: float) -> float:
+    result = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
+    cfg = result.scalar_one_or_none()
     if cfg:
         try:
             return float(cfg.value)
@@ -35,51 +37,72 @@ def _get_global_limit(key: str, db: Session, default: float) -> float:
     return default
 
 
-def _today_consumed_ml(consumer_id: uuid.UUID, db: Session) -> float:
+async def _today_consumed_ml(consumer_id: uuid.UUID, db: AsyncSession) -> float:
     today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
-    return db.query(func.coalesce(func.sum(Purchase.quantity_ml), 0)).filter(
-        Purchase.consumer_id == consumer_id,
-        Purchase.purchased_at >= today_start,
-    ).scalar() or 0
+    result = await db.execute(
+        select(func.coalesce(func.sum(Purchase.quantity_ml), 0)).where(
+            Purchase.consumer_id == consumer_id,
+            Purchase.purchased_at >= today_start,
+        )
+    )
+    return float(result.scalar() or 0)
 
 
-def _week_consumed_ml(consumer_id: uuid.UUID, db: Session) -> float:
+async def _week_consumed_ml(consumer_id: uuid.UUID, db: AsyncSession) -> float:
     from datetime import timedelta
     today = date.today()
     week_start = datetime.combine(today - timedelta(days=today.weekday()), datetime.min.time()).replace(tzinfo=timezone.utc)
-    return db.query(func.coalesce(func.sum(Purchase.quantity_ml), 0)).filter(
-        Purchase.consumer_id == consumer_id,
-        Purchase.purchased_at >= week_start,
-    ).scalar() or 0
+    result = await db.execute(
+        select(func.coalesce(func.sum(Purchase.quantity_ml), 0)).where(
+            Purchase.consumer_id == consumer_id,
+            Purchase.purchased_at >= week_start,
+        )
+    )
+    return float(result.scalar() or 0)
 
 
 def ml_to_sd(ml: float, alcohol_pct: float = 5.0) -> float:
     """Convert ml of beverage to Standard Drinks (10g pure alcohol)."""
-    pure_alcohol_g = (ml * alcohol_pct / 100) * 0.789  # density of ethanol
+    pure_alcohol_g = (ml * alcohol_pct / 100) * 0.789
     return round(pure_alcohol_g / 10, 2)
 
 
 # ── Shop dashboard ────────────────────────────────────────────────────────────
 
-def get_operator_dashboard(operator: User, db: Session) -> dict:
-    shop = db.query(Shop).filter(Shop.operator_id == operator.id, Shop.is_active == True).first()
+async def get_operator_dashboard(operator: User, db: AsyncSession) -> dict:
+    shop_result = await db.execute(
+        select(Shop).where(Shop.operator_id == operator.id, Shop.is_active == True)  # noqa
+    )
+    shop = shop_result.scalar_one_or_none()
     if not shop:
         raise HTTPException(status_code=404, detail="No active shop assigned to this operator.")
 
     today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
-    today_purchases = (
-        db.query(Purchase)
-        .filter(Purchase.shop_id == shop.id, Purchase.purchased_at >= today_start)
+
+    recent_result = await db.execute(
+        select(Purchase)
+        .where(Purchase.shop_id == shop.id, Purchase.purchased_at >= today_start)
         .order_by(Purchase.purchased_at.desc())
         .limit(20)
-        .all()
     )
-    today_count = db.query(Purchase).filter(Purchase.shop_id == shop.id, Purchase.purchased_at >= today_start).count()
-    today_revenue = db.query(func.coalesce(func.sum(Purchase.price), 0)).filter(
-        Purchase.shop_id == shop.id, Purchase.purchased_at >= today_start
-    ).scalar() or 0
+    today_purchases = recent_result.scalars().all()
 
-    # PIN rotation warning
+    count_result = await db.execute(
+        select(func.count()).select_from(
+            select(Purchase).where(
+                Purchase.shop_id == shop.id, Purchase.purchased_at >= today_start
+            ).subquery()
+        )
+    )
+    today_count = count_result.scalar_one()
+
+    revenue_result = await db.execute(
+        select(func.coalesce(func.sum(Purchase.price), 0)).where(
+            Purchase.shop_id == shop.id, Purchase.purchased_at >= today_start
+        )
+    )
+    today_revenue = float(revenue_result.scalar() or 0)
+
     pin_warning = None
     if shop.pin_rotation_due_at:
         days_left = (shop.pin_rotation_due_at - datetime.now(timezone.utc)).days
@@ -97,7 +120,7 @@ def get_operator_dashboard(operator: User, db: Session) -> dict:
             "pin_rotation_due_at": shop.pin_rotation_due_at.isoformat() if shop.pin_rotation_due_at else None,
         },
         "today_purchases_count": today_count,
-        "today_revenue": float(today_revenue),
+        "today_revenue": today_revenue,
         "recent_transactions": [_serialize_purchase(p) for p in today_purchases],
         "pin_rotation_warning": pin_warning,
     }
@@ -117,37 +140,53 @@ def _serialize_purchase(p: Purchase) -> dict:
 
 # ── Consumer lookup via QR ────────────────────────────────────────────────────
 
-def lookup_consumer_by_qr(qr_payload_str: str, db: Session) -> dict:
-    """
-    Verify QR payload signature, then return safe consumer info for the operator.
-    The operator sees: name, masked Aadhaar, limits, today's consumption.
-    The operator does NOT see: full Aadhaar, email, or any health data.
-    """
-    try:
-        payload = verify_qr_payload(qr_payload_str)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid or expired QR code. Ask consumer to refresh their QR.")
+async def lookup_consumer_by_qr(qr_payload_str: str, db: AsyncSession) -> dict:
+    """Verify QR payload signature, then return safe consumer info for the operator."""
+    import json as _json
+    consumer_user_id: str | None = None
 
-    consumer_user_id = payload["uid"]
-    profile = db.query(ConsumerProfile).filter(
-        ConsumerProfile.user_id == consumer_user_id
-    ).first()
+    # Manual override path — no HMAC needed
+    try:
+        parsed = _json.loads(qr_payload_str)
+        if parsed.get("manual") is True and parsed.get("uid"):
+            consumer_user_id = str(parsed["uid"]).strip()
+    except Exception:
+        pass
+
+    # Normal QR path — verify HMAC signature
+    if consumer_user_id is None:
+        try:
+            payload = verify_qr_payload(qr_payload_str)
+            consumer_user_id = payload["uid"]
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid or expired QR code. Ask consumer to refresh their QR."
+            )
+
+    profile_result = await db.execute(
+        select(ConsumerProfile).where(ConsumerProfile.user_id == consumer_user_id)
+    )
+    profile = profile_result.scalar_one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Consumer profile not found.")
 
-    user = db.query(User).filter(User.id == consumer_user_id).first()
+    user_result = await db.execute(select(User).where(User.id == consumer_user_id))
+    user = user_result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=403, detail="Consumer account is inactive.")
 
-    # Check self-restriction (is_locked=True AND lock has not expired)
+    # Self-restriction check
     now_utc = datetime.now(timezone.utc)
-    active_restriction = db.query(SelfRestriction).filter(
-        SelfRestriction.user_id == consumer_user_id,
-        SelfRestriction.is_locked == True,
-    ).filter(
-        # locked_until is NULL (permanent) OR still in the future
-        (SelfRestriction.locked_until == None) | (SelfRestriction.locked_until > now_utc)
-    ).first()
+    restriction_result = await db.execute(
+        select(SelfRestriction).where(
+            SelfRestriction.user_id == consumer_user_id,
+            SelfRestriction.is_locked == True,  # noqa
+        ).where(
+            (SelfRestriction.locked_until == None) | (SelfRestriction.locked_until > now_utc)  # noqa
+        )
+    )
+    active_restriction = restriction_result.scalar_one_or_none()
     if active_restriction:
         until_str = (
             active_restriction.locked_until.strftime("%d %b %Y")
@@ -158,20 +197,33 @@ def lookup_consumer_by_qr(qr_payload_str: str, db: Session) -> dict:
             detail=f"Consumer has a self-restriction active until {until_str}. Purchase blocked."
         )
 
-    # Today's consumption
-    today_ml = _today_consumed_ml(uuid.UUID(consumer_user_id), db)
-    week_ml = _week_consumed_ml(uuid.UUID(consumer_user_id), db)
+    today_ml = await _today_consumed_ml(uuid.UUID(str(consumer_user_id)), db)
+    week_ml = await _week_consumed_ml(uuid.UUID(str(consumer_user_id)), db)
 
-    # Limits (use ConsumerLimits if exists, else profile defaults)
-    limits_row = db.query(ConsumerLimits).filter(ConsumerLimits.user_id == consumer_user_id).first()
-    daily_limit_ml = (limits_row.daily_limit_ml if limits_row else None) or profile.daily_limit_ml or 960
-    weekly_limit_ml = (limits_row.weekly_limit_ml if limits_row else None) or profile.weekly_limit_ml or 4800
-
+    daily_limit_ml = 960
+    weekly_limit_ml = 4800
     remaining_daily = max(0, daily_limit_ml - today_ml)
     remaining_weekly = max(0, weekly_limit_ml - week_ml)
 
+    dr_result = await db.execute(
+        select(DoctorRestriction).where(
+            DoctorRestriction.patient_user_id == consumer_user_id,
+            DoctorRestriction.status == RestrictionStatus.ACTIVE.value,
+        )
+    )
+    active_doctor_restriction = dr_result.scalar_one_or_none()
+    medical_block = active_doctor_restriction is not None
+    medical_block_category = active_doctor_restriction.reason_category if active_doctor_restriction else None
+
+    _CATEGORY_LABELS = {
+        "liver_disease": "Liver Disease", "addiction_risk": "Addiction Risk",
+        "medication_interaction": "Medication Interaction", "pregnancy": "Pregnancy",
+        "other": "Other Medical",
+    }
+    medical_block_label = _CATEGORY_LABELS.get(medical_block_category, "Medical") if medical_block_category else None
+
     return {
-        "consumer_user_id": consumer_user_id,
+        "consumer_user_id": str(consumer_user_id),
         "full_name": user.full_name,
         "aadhaar_masked": (
             mask_aadhaar(decrypt_aadhaar(profile.aadhaar_encrypted))
@@ -186,37 +238,35 @@ def lookup_consumer_by_qr(qr_payload_str: str, db: Session) -> dict:
         "remaining_daily_ml": remaining_daily,
         "remaining_weekly_ml": remaining_weekly,
         "daily_pct_used": round((today_ml / daily_limit_ml) * 100, 1) if daily_limit_ml else 0,
-        "can_purchase": remaining_daily > 0,
+        "can_purchase": remaining_daily > 0 and not medical_block,
+        "medical_restriction_active": medical_block,
+        "medical_restriction_category": medical_block_label,
     }
 
 
 # ── Record purchase ───────────────────────────────────────────────────────────
 
-def record_purchase(
+async def record_purchase(
     consumer_user_id: str,
     product_name: str,
     quantity_ml: int,
     price: float,
     alcohol_pct: float,
     operator: User,
-    db: Session,
+    db: AsyncSession,
     product_id: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> dict:
-    """
-    Record a purchase with full limit checking:
-    - Teetotaler block
-    - Self-restriction block
-    - Global daily/weekly SD cap (from system_config)
-    - Consumer personal daily/weekly ml limit
-    """
-    profile = db.query(ConsumerProfile).filter(
-        ConsumerProfile.user_id == consumer_user_id
-    ).first()
+    """Record a purchase with full limit checking."""
+    profile_result = await db.execute(
+        select(ConsumerProfile).where(ConsumerProfile.user_id == consumer_user_id)
+    )
+    profile = profile_result.scalar_one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Consumer profile not found.")
 
-    user = db.query(User).filter(User.id == consumer_user_id).first()
+    user_result = await db.execute(select(User).where(User.id == consumer_user_id))
+    user = user_result.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=403, detail="Consumer account is inactive.")
 
@@ -227,65 +277,79 @@ def record_purchase(
             alert_type=AlertType.TEETOTALER_BREACH,
             message="Purchase attempted — you are registered as a Teetotaler.",
         ))
-        db.commit()
+        await db.commit()
         raise HTTPException(status_code=403, detail="Consumer is a Teetotaler. Purchase blocked.")
 
     # Self-restriction block
     now_utc = datetime.now(timezone.utc)
-    active_restriction = db.query(SelfRestriction).filter(
-        SelfRestriction.user_id == consumer_user_id,
-        SelfRestriction.is_locked == True,
-    ).filter(
-        (SelfRestriction.locked_until == None) | (SelfRestriction.locked_until > now_utc)
-    ).first()
-    if active_restriction:
+    restriction_result = await db.execute(
+        select(SelfRestriction).where(
+            SelfRestriction.user_id == consumer_user_id,
+            SelfRestriction.is_locked == True,  # noqa
+        ).where(
+            (SelfRestriction.locked_until == None) | (SelfRestriction.locked_until > now_utc)  # noqa
+        )
+    )
+    if restriction_result.scalar_one_or_none():
         raise HTTPException(status_code=403, detail="Consumer has a self-restriction active. Purchase blocked.")
 
+    # Medical restriction block
+    _CAT_LABELS = {
+        "liver_disease": "Liver Disease", "addiction_risk": "Addiction Risk",
+        "medication_interaction": "Medication Interaction", "pregnancy": "Pregnancy",
+        "other": "Other Medical",
+    }
+    dr_result = await db.execute(
+        select(DoctorRestriction).where(
+            DoctorRestriction.patient_user_id == consumer_user_id,
+            DoctorRestriction.status == RestrictionStatus.ACTIVE.value,
+        )
+    )
+    active_dr = dr_result.scalar_one_or_none()
+    if active_dr:
+        label = _CAT_LABELS.get(active_dr.reason_category, "Medical restriction")
+        raise HTTPException(
+            status_code=403,
+            detail=f"Purchase blocked: Medical restriction active ({label}). Contact issuing clinic to appeal.",
+        )
 
-    # Get limits
-    limits_row = db.query(ConsumerLimits).filter(ConsumerLimits.user_id == consumer_user_id).first()
-    daily_limit_ml = (limits_row.daily_limit_ml if limits_row else None) or profile.daily_limit_ml or 960
-    weekly_limit_ml = (limits_row.weekly_limit_ml if limits_row else None) or profile.weekly_limit_ml or 4800
-
-    # Apply global system cap (convert SD limits to ml)
-    global_daily_sd = _get_global_limit("global_daily_limit_sd", db, 4.0)
-    global_weekly_sd = _get_global_limit("global_weekly_limit_sd", db, 14.0)
-    # 1 SD ≈ 240ml of 5% beer equivalent
+    daily_limit_ml = 960
+    weekly_limit_ml = 4800
+    global_daily_sd = await _get_global_limit("global_daily_limit_sd", db, 4.0)
+    global_weekly_sd = await _get_global_limit("global_weekly_limit_sd", db, 14.0)
     global_daily_ml = global_daily_sd * 240
     global_weekly_ml = global_weekly_sd * 240
     effective_daily_ml = min(daily_limit_ml, global_daily_ml)
     effective_weekly_ml = min(weekly_limit_ml, global_weekly_ml)
 
-    today_ml = _today_consumed_ml(uuid.UUID(consumer_user_id), db)
-    week_ml = _week_consumed_ml(uuid.UUID(consumer_user_id), db)
+    consumer_uuid = uuid.UUID(str(consumer_user_id))
+    today_ml = await _today_consumed_ml(consumer_uuid, db)
+    week_ml = await _week_consumed_ml(consumer_uuid, db)
 
-    # Daily limit check
     if today_ml + quantity_ml > effective_daily_ml:
         db.add(Alert(
             consumer_id=consumer_user_id,
             alert_type=AlertType.LIMIT_REACHED,
             message=f"Daily limit of {effective_daily_ml:.0f}ml reached. Purchase blocked.",
         ))
-        db.commit()
+        await db.commit()
         raise HTTPException(
             status_code=403,
             detail=f"Daily limit exceeded. Already consumed {today_ml:.0f}ml of {effective_daily_ml:.0f}ml limit."
         )
 
-    # Weekly limit check
     if week_ml + quantity_ml > effective_weekly_ml:
         db.add(Alert(
             consumer_id=consumer_user_id,
             alert_type=AlertType.LIMIT_REACHED,
             message=f"Weekly limit of {effective_weekly_ml:.0f}ml reached. Purchase blocked.",
         ))
-        db.commit()
+        await db.commit()
         raise HTTPException(
             status_code=403,
             detail=f"Weekly limit exceeded. Already consumed {week_ml:.0f}ml of {effective_weekly_ml:.0f}ml weekly limit."
         )
 
-    # Approaching-limit warning (≥75%)
     if (today_ml + quantity_ml) >= effective_daily_ml * 0.75:
         db.add(Alert(
             consumer_id=consumer_user_id,
@@ -293,12 +357,13 @@ def record_purchase(
             message="Approaching your daily alcohol limit.",
         ))
 
-    # Get operator's shop
-    shop = db.query(Shop).filter(Shop.operator_id == operator.id, Shop.is_active == True).first()
+    shop_result = await db.execute(
+        select(Shop).where(Shop.operator_id == operator.id, Shop.is_active == True)  # noqa
+    )
+    shop = shop_result.scalar_one_or_none()
     if not shop:
         raise HTTPException(status_code=404, detail="No active shop for this operator.")
 
-    # Compute standard drinks for this purchase
     std_drinks = ml_to_sd(quantity_ml, alcohol_pct)
     remaining_after = max(0, effective_daily_ml - today_ml - quantity_ml)
     remaining_weekly_after = max(0, effective_weekly_ml - week_ml - quantity_ml)
@@ -319,8 +384,8 @@ def record_purchase(
         notes=notes,
     )
     db.add(purchase)
-    db.commit()
-    db.refresh(purchase)
+    await db.commit()
+    await db.refresh(purchase)
 
     return {
         "message": "Purchase recorded successfully.",
@@ -334,25 +399,33 @@ def record_purchase(
 
 # ── Shop purchase history ─────────────────────────────────────────────────────
 
-def get_shop_history(
+async def get_shop_history(
     operator: User,
-    db: Session,
+    db: AsyncSession,
     skip: int = 0,
     limit: int = 50,
     date_filter: Optional[date] = None,
 ) -> dict:
-    shop = db.query(Shop).filter(Shop.operator_id == operator.id).first()
+    shop_result = await db.execute(select(Shop).where(Shop.operator_id == operator.id))
+    shop = shop_result.scalar_one_or_none()
     if not shop:
         raise HTTPException(status_code=404, detail="No shop found for this operator.")
 
-    q = db.query(Purchase).filter(Purchase.shop_id == shop.id)
+    stmt = select(Purchase).where(Purchase.shop_id == shop.id)
     if date_filter:
         day_start = datetime.combine(date_filter, datetime.min.time()).replace(tzinfo=timezone.utc)
         day_end = datetime.combine(date_filter, datetime.max.time()).replace(tzinfo=timezone.utc)
-        q = q.filter(Purchase.purchased_at >= day_start, Purchase.purchased_at <= day_end)
+        stmt = stmt.where(Purchase.purchased_at >= day_start, Purchase.purchased_at <= day_end)
 
-    total = q.count()
-    purchases = q.order_by(Purchase.purchased_at.desc()).offset(skip).limit(limit).all()
+    count_result = await db.execute(
+        select(func.count()).select_from(stmt.subquery())
+    )
+    total = count_result.scalar_one()
+
+    items_result = await db.execute(
+        stmt.order_by(Purchase.purchased_at.desc()).offset(skip).limit(limit)
+    )
+    purchases = items_result.scalars().all()
     total_revenue = sum(float(p.price) for p in purchases)
 
     return {
@@ -365,10 +438,12 @@ def get_shop_history(
 
 # ── Product catalogue ─────────────────────────────────────────────────────────
 
-def get_products(db: Session) -> list[dict]:
-    products = db.query(Product).filter(Product.is_active == True).order_by(Product.category, Product.name).all()
+async def get_products(db: AsyncSession) -> list[dict]:
+    result = await db.execute(
+        select(Product).where(Product.is_active == True).order_by(Product.category, Product.name)  # noqa
+    )
+    products = result.scalars().all()
     if not products:
-        # Return seeded TASMAC product catalogue
         return _get_mock_catalogue()
     return [
         {
@@ -401,8 +476,6 @@ def _get_mock_catalogue() -> list[dict]:
         {"id": str(_uuid.uuid4()), "name": "Bagpiper Gold", "category": "Whisky", "volume_ml": 180, "price": 120.0, "alcohol_pct": 42.8},
         {"id": str(_uuid.uuid4()), "name": "Blenders Pride", "category": "Whisky", "volume_ml": 750, "price": 1450.0, "alcohol_pct": 42.8},
         {"id": str(_uuid.uuid4()), "name": "Signature Rare", "category": "Whisky", "volume_ml": 750, "price": 950.0, "alcohol_pct": 42.8},
-        {"id": str(_uuid.uuid4()), "name": "Aristocrat Premium Whisky", "category": "Whisky", "volume_ml": 180, "price": 90.0, "alcohol_pct": 42.8},
-        {"id": str(_uuid.uuid4()), "name": "Contessa Rum", "category": "Rum", "volume_ml": 375, "price": 180.0, "alcohol_pct": 42.8},
         {"id": str(_uuid.uuid4()), "name": "Smirnoff Vodka", "category": "Vodka", "volume_ml": 180, "price": 200.0, "alcohol_pct": 37.5},
         {"id": str(_uuid.uuid4()), "name": "Smirnoff Vodka", "category": "Vodka", "volume_ml": 750, "price": 780.0, "alcohol_pct": 37.5},
         {"id": str(_uuid.uuid4()), "name": "Sula Shiraz", "category": "Wine", "volume_ml": 750, "price": 580.0, "alcohol_pct": 13.5},

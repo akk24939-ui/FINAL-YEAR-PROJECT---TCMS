@@ -21,4 +21,15 @@ export const authApi = {
 
   verifyOtp: (mobile_number: string, otp_code: string) =>
     apiClient.post<{ verified: boolean }>('/api/v1/otp/verify', { mobile_number, otp_code }),
+
+  // ── Forgot Password ────────────────────────────────────────────────────────
+  forgotPassword: (mobile_number: string) =>
+    apiClient.post('/api/v1/auth/forgot-password', { mobile_number }),
+
+  verifyResetOtp: (mobile_number: string, otp_code: string) =>
+    apiClient.post<{ reset_token: string }>('/api/v1/auth/verify-reset-otp', { mobile_number, otp_code }),
+
+  resetPassword: (reset_token: string, new_password: string) =>
+    apiClient.post('/api/v1/auth/reset-password', { reset_token, new_password }),
 }
+

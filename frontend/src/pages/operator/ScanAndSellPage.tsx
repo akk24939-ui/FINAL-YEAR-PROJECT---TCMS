@@ -17,17 +17,18 @@ import {
 } from 'lucide-react'
 import { operatorConsumerApi, operatorProductsApi, operatorPurchaseApi } from '../../api/operator.api'
 import type { ConsumerLookupResult, Product } from '../../types/operator.types'
+import { getErrorMessage } from '../../utils/getErrorMessage'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Step = 'scan' | 'eligibility' | 'product' | 'confirm' | 'receipt'
 type ScanMode = 'camera' | 'paste' | 'manual'
 
 const STEPS: { id: Step; label: string }[] = [
-  { id: 'scan',        label: 'Scan QR'    },
-  { id: 'eligibility', label: 'Eligibility'},
-  { id: 'product',     label: 'Product'    },
-  { id: 'confirm',     label: 'Confirm'    },
-  { id: 'receipt',     label: 'Receipt'    },
+  { id: 'scan', label: 'Scan QR' },
+  { id: 'eligibility', label: 'Eligibility' },
+  { id: 'product', label: 'Product' },
+  { id: 'confirm', label: 'Confirm' },
+  { id: 'receipt', label: 'Receipt' },
 ]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,8 +73,8 @@ const StatusBadge: React.FC<{ eligible: boolean; label: string }> = ({ eligible,
 
 // ─── Camera Scanner Sub-Component ─────────────────────────────────────────────
 const CameraScanner: React.FC<{ onScan: (payload: string) => void; onError: (msg: string) => void }> = ({ onScan, onError }) => {
-  const [started, setStarted]   = useState(false)
-  const [loading, setLoading]   = useState(false)
+  const [started, setStarted] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [camError, setCamError] = useState('')
   const scannerRef = useRef<Html5Qrcode | null>(null)
   const mountedRef = useRef(true)
@@ -95,19 +96,23 @@ const CameraScanner: React.FC<{ onScan: (payload: string) => void; onError: (msg
       )
       if (mountedRef.current) setStarted(true)
     } catch (err) {
-      const msg = String(err)
-      if (msg.includes('Permission') || msg.includes('NotAllowed')) {
-        setCamError('Camera permission denied. Please allow camera access in your browser and try again.')
-      } else if (msg.includes('NotFound')) {
-        setCamError('No camera found on this device. Use Paste or Manual mode instead.')
-      } else {
-        setCamError('Could not start camera. Use Paste mode to enter the QR payload.')
+      let msg = 'Could not start camera. Use Paste mode to enter the QR payload.'
+      const errStr = String(err)
+      if (errStr.includes('Permission') || errStr.includes('NotAllowed') || errStr.includes('denied')) {
+        msg = 'Camera permission denied. Please allow camera access in your browser settings and try again.'
+      } else if (errStr.includes('NotFound') || errStr.includes('no camera')) {
+        msg = 'No camera found on this device. Use Paste or Manual ID mode instead.'
+      } else if (errStr.includes('NotReadableError') || errStr.includes('in use')) {
+        msg = 'Camera is in use by another app. Close other apps and try again.'
       }
-      if (mountedRef.current) onError(camError)
+      if (mountedRef.current) {
+        setCamError(msg)
+        onError(msg)  // pass msg directly, not stale camError state
+      }
     } finally {
       if (mountedRef.current) setLoading(false)
     }
-  }, [onScan, onError, camError])
+  }, [onScan, onError])
 
   const stopCamera = useCallback(async () => {
     if (scannerRef.current) {
@@ -181,13 +186,13 @@ const CameraScanner: React.FC<{ onScan: (payload: string) => void; onError: (msg
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 const ScanAndSellPage: React.FC = () => {
-  const [step, setStep]               = useState<Step>('scan')
-  const [scanMode, setScanMode]       = useState<ScanMode>('camera')
-  const [qrInput, setQrInput]         = useState('')
-  const [manualId, setManualId]       = useState('')
-  const [consumer, setConsumer]       = useState<ConsumerLookupResult | null>(null)
+  const [step, setStep] = useState<Step>('scan')
+  const [scanMode, setScanMode] = useState<ScanMode>('camera')
+  const [qrInput, setQrInput] = useState('')
+  const [manualId, setManualId] = useState('')
+  const [consumer, setConsumer] = useState<ConsumerLookupResult | null>(null)
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
-  const [productSearch, setProductSearch]     = useState('')
+  const [productSearch, setProductSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('All')
   const [receipt, setReceipt] = useState<{
     purchase_id: string; standard_drinks: number
@@ -214,8 +219,7 @@ const ScanAndSellPage: React.FC = () => {
     mutationFn: (payload: string) => operatorConsumerApi.lookupByQR(payload),
     onSuccess: (res) => { setConsumer(res.data); setLookupError(''); setStep('eligibility') },
     onError: (err: unknown) => {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setLookupError(detail || 'Invalid or expired QR code. Ask the consumer to refresh their QR.')
+      setLookupError(getErrorMessage(err, 'Invalid or expired QR code. Ask the consumer to refresh their QR.'))
     },
   })
 
@@ -260,15 +264,13 @@ const ScanAndSellPage: React.FC = () => {
       <div className="flex items-center gap-0">
         {STEPS.map((s, i) => (
           <React.Fragment key={s.id}>
-            <div className={`flex items-center gap-1.5 ${
-              step === s.id ? 'text-gray-900 dark:text-white'
-              : stepIdx > i ? 'text-emerald-600 dark:text-emerald-400'
-              : 'text-gray-400 dark:text-gray-600'}`}
+            <div className={`flex items-center gap-1.5 ${step === s.id ? 'text-gray-900 dark:text-white'
+                : stepIdx > i ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-gray-400 dark:text-gray-600'}`}
             >
-              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 ${
-                step === s.id ? 'bg-red-600 text-white'
-                : stepIdx > i ? 'bg-emerald-500 text-white'
-                : 'bg-gray-100 dark:bg-gray-800'}`}
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 ${step === s.id ? 'bg-red-600 text-white'
+                  : stepIdx > i ? 'bg-emerald-500 text-white'
+                    : 'bg-gray-100 dark:bg-gray-800'}`}
               >
                 {stepIdx > i ? <CheckCircle2 className="w-3.5 h-3.5" /> : i + 1}
               </div>
@@ -288,18 +290,17 @@ const ScanAndSellPage: React.FC = () => {
           {/* Mode tabs */}
           <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl">
             {([
-              { id: 'camera' as ScanMode, icon: Camera,          label: 'Camera'       },
-              { id: 'paste'  as ScanMode, icon: ClipboardPaste,  label: 'Paste QR'     },
-              { id: 'manual' as ScanMode, icon: Hash,            label: 'Manual ID'    },
+              { id: 'camera' as ScanMode, icon: Camera, label: 'Camera' },
+              { id: 'paste' as ScanMode, icon: ClipboardPaste, label: 'Paste QR' },
+              { id: 'manual' as ScanMode, icon: Hash, label: 'Manual ID' },
             ] as const).map(m => (
               <button
                 key={m.id}
                 onClick={() => { setScanMode(m.id); setLookupError('') }}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition ${
-                  scanMode === m.id
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition ${scanMode === m.id
                     ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm'
                     : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                }`}
+                  }`}
               >
                 <m.icon className="w-3.5 h-3.5" />
                 {m.label}
@@ -644,7 +645,7 @@ const ScanAndSellPage: React.FC = () => {
           {recordMutation.isError && (
             <div className="flex items-start gap-2 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-xl px-4 py-3 text-red-600 dark:text-red-400 text-sm">
               <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              {(recordMutation.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Sale failed. Please try again.'}
+              {getErrorMessage(recordMutation.error, 'Sale failed. Please try again.')}
             </div>
           )}
 
@@ -671,11 +672,11 @@ const ScanAndSellPage: React.FC = () => {
 
           <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 text-left space-y-2.5">
             {[
-              ['Product',         selectedProduct.name],
-              ['Volume',          `${selectedProduct.volume_ml} ml`],
+              ['Product', selectedProduct.name],
+              ['Volume', `${selectedProduct.volume_ml} ml`],
               ['Standard Drinks', `${receipt.standard_drinks.toFixed(2)} SD`],
-              ['Price',           `₹${selectedProduct.price}`],
-              ['Customer',        consumer.full_name],
+              ['Price', `₹${selectedProduct.price}`],
+              ['Customer', consumer.full_name],
               ['Remaining Daily', `${receipt.remaining_daily_ml.toFixed(0)} ml`],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between text-sm">

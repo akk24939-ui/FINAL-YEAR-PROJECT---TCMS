@@ -14,7 +14,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_aadhaar, mask_aadhaar
 from app.models.consumer_limits import ConsumerLimits
@@ -68,21 +69,18 @@ def _compute_percent(consumed: float, limit: float) -> float:
     return round(min(consumed / limit * 100, 999.9), 1)
 
 
-def _fetch_purchases_between(consumer_id, start: datetime, end: datetime, db: Session):
-    """Fetch purchases for a consumer in a datetime range.
-    Returns list of standard_drinks values (or computed from quantity_ml).
-    """
+async def _fetch_purchases_between(consumer_id, start: datetime, end: datetime, db: AsyncSession) -> float:
+    """Fetch purchases for a consumer in a datetime range."""
     try:
         from app.models.purchase import Purchase
-        rows = (
-            db.query(Purchase)
-            .filter(
+        result = await db.execute(
+            select(Purchase).where(
                 Purchase.consumer_id == consumer_id,
                 Purchase.purchased_at >= start,
                 Purchase.purchased_at < end,
             )
-            .all()
         )
+        rows = result.scalars().all()
         total_sd = 0.0
         for p in rows:
             if p.standard_drinks is not None:
@@ -95,39 +93,42 @@ def _fetch_purchases_between(consumer_id, start: datetime, end: datetime, db: Se
         return 0.0
 
 
-def _get_limits(consumer_profile_id, db: Session) -> ConsumerLimits | None:
-    return db.query(ConsumerLimits).filter(
-        ConsumerLimits.consumer_id == consumer_profile_id
-    ).first()
+async def _get_limits(consumer_profile_id, db: AsyncSession) -> ConsumerLimits | None:
+    result = await db.execute(
+        select(ConsumerLimits).where(ConsumerLimits.consumer_id == consumer_profile_id)
+    )
+    return result.scalar_one_or_none()
 
 
-def _get_restriction(user_id, db: Session) -> SelfRestriction | None:
-    return db.query(SelfRestriction).filter(
-        SelfRestriction.user_id == user_id
-    ).first()
+async def _get_restriction(user_id, db: AsyncSession) -> SelfRestriction | None:
+    result = await db.execute(
+        select(SelfRestriction).where(SelfRestriction.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
 
 
 # ── Main dashboard builder ────────────────────────────────────────────────────
 
-def get_dashboard(user: User, db: Session) -> DashboardResponse:
+async def get_dashboard(user: User, db: AsyncSession) -> DashboardResponse:
     """Build full dashboard response for the authenticated consumer."""
 
     # Fetch profile
-    profile = db.query(ConsumerProfile).filter(
-        ConsumerProfile.user_id == user.id
-    ).first()
+    result = await db.execute(
+        select(ConsumerProfile).where(ConsumerProfile.user_id == user.id)
+    )
+    profile = result.scalar_one_or_none()
 
     if profile is None:
         raise Exception("Consumer profile not found")
 
     # Fetch limits (default 0 if not set)
-    limits = _get_limits(profile.id, db)
+    limits = await _get_limits(profile.id, db)
     daily_limit = limits.daily_limit_sd if limits else 0.0
     weekly_limit = limits.weekly_limit_sd if limits else 0.0
     monthly_limit = limits.monthly_limit_sd if limits else 0.0
 
     # Fetch restriction lock state
-    restriction = _get_restriction(user.id, db)
+    restriction = await _get_restriction(user.id, db)
     is_locked = False
     locked_until = None
     if restriction and restriction.is_locked:
@@ -154,9 +155,9 @@ def get_dashboard(user: User, db: Session) -> DashboardResponse:
         month_end = datetime(now_utc.year, now_utc.month + 1, 1, tzinfo=timezone.utc)
 
     # ── Consumption totals ─────────────────────────────────────────────────────
-    today_sd = _fetch_purchases_between(user.id, today_start, today_end, db)
-    week_sd = _fetch_purchases_between(user.id, week_start, week_end, db)
-    month_sd = _fetch_purchases_between(user.id, month_start, month_end, db)
+    today_sd = await _fetch_purchases_between(user.id, today_start, today_end, db)
+    week_sd = await _fetch_purchases_between(user.id, week_start, week_end, db)
+    month_sd = await _fetch_purchases_between(user.id, month_start, month_end, db)
 
     def make_summary(consumed: float, limit: float) -> ConsumptionSummary:
         ml = _sd_to_ml(consumed)
@@ -179,7 +180,7 @@ def get_dashboard(user: User, db: Session) -> DashboardResponse:
     for i in range(6, -1, -1):
         day_start = today_start - timedelta(days=i)
         day_end = day_start + timedelta(days=1)
-        day_sd = _fetch_purchases_between(user.id, day_start, day_end, db)
+        day_sd = await _fetch_purchases_between(user.id, day_start, day_end, db)
         day_label = DAY_LABELS[day_start.weekday()]
         daily_chart.append(DailyChartPoint(
             label=day_label,
@@ -193,7 +194,7 @@ def get_dashboard(user: User, db: Session) -> DashboardResponse:
     for i in range(3, -1, -1):
         w_start = week_start - timedelta(weeks=i)
         w_end = w_start + timedelta(days=7)
-        w_sd = _fetch_purchases_between(user.id, w_start, w_end, db)
+        w_sd = await _fetch_purchases_between(user.id, w_start, w_end, db)
         weekly_chart.append(WeeklyChartPoint(
             label=f"Week {4 - i}",
             week_start=w_start.date().isoformat(),

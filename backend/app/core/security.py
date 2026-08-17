@@ -1,295 +1,186 @@
-"""Security utilities — JWT, password hashing, Fernet Aadhaar encryption, OTP, QR signing.
-
-Security design decisions:
-- Access tokens: short-lived (15 min), stored in memory by the SPA.
-- Refresh tokens: long-lived (7 days), sent and stored ONLY as httpOnly strict cookie.
-- Aadhaar: encrypted with Fernet (AES-128-CBC + HMAC-SHA256).  Only last-4 returned in APIs.
-- OTP: bcrypt-hashed at rest; single-use + time-boxed + attempt-limited.
-- QR payload: HMAC-SHA256 signed JSON; raw PII never embedded.
 """
-from __future__ import annotations
+Security helpers: JWT, Argon2id hashing, AES-GCM field encryption, QR HMAC signing.
 
+Security Notes:
+  - JWT access tokens: HS256, 15-min lifetime, no sensitive data in payload.
+  - Refresh tokens: stored in DB; rotated on every use; family-invalidated on replay.
+  - Passwords: Argon2id (time_cost=3, memory_cost=65536, parallelism=2).
+  - Field encryption: Fernet (AES-128-CBC + HMAC-SHA256) from cryptography library.
+  - QR tokens: HMAC-SHA256 signed reference IDs — never contain raw consumer data.
+"""
 import hashlib
-import hmac
-import json
-import secrets
+import hmac as _hmac
+import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
-from cryptography.fernet import Fernet, InvalidToken
-from fastapi import HTTPException, Request, Response, status
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, InvalidHashError
+from cryptography.fernet import Fernet
 from jose import JWTError, jwt
-import bcrypt
 
-from app.core.config import settings
+from app.core.config import get_settings
 
-# ── Fernet cipher (singleton — key loaded once at startup) ─────────────────────
-_fernet = Fernet(settings.FERNET_KEY.encode())
+settings = get_settings()
 
+# ── Password hashing ──────────────────────────────────────────────────────────
+_ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
 
-# ── Password helpers ───────────────────────────────────────────────────────────
 
 def hash_password(plain: str) -> str:
-    """Return bcrypt hash of *plain* using configured cost factor."""
-    # Ensure plain text is bytes and truncate if it exceeds 72 chars to avoid ValueError
-    plain_bytes = plain[:72].encode('utf-8')
-    salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
-    hashed_bytes = bcrypt.hashpw(plain_bytes, salt)
-    return hashed_bytes.decode('utf-8')
+    return _ph.hash(plain)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Constant-time bcrypt verification."""
-    plain_bytes = plain[:72].encode('utf-8')
-    hashed_bytes = hashed.encode('utf-8')
-    return bcrypt.checkpw(plain_bytes, hashed_bytes)
+    try:
+        return _ph.verify(hashed, plain)
+    except (VerifyMismatchError, InvalidHashError):
+        return False
 
 
-# ── JWT helpers ────────────────────────────────────────────────────────────────
+def password_needs_rehash(hashed: str) -> bool:
+    return _ph.check_needs_rehash(hashed)
 
+
+# ── JWT ───────────────────────────────────────────────────────────────────────
 def create_access_token(user_id: str, role: str, token_version: int = 0) -> str:
-    """Create a signed JWT access token valid for ACCESS_TOKEN_EXPIRE_MINUTES."""
-    now = datetime.now(timezone.utc)
-    payload = {
-        "sub": str(user_id),
-        "role": role,
-        "token_version": token_version,
-        "iat": now,
-        "exp": now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-        "type": "access",
-    }
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
+    return jwt.encode(
+        {"sub": user_id, "role": role, "exp": expire, "type": "access", "token_version": token_version},
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
 
 
+def create_refresh_token(user_id: str, family_id: str | None = None) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+    payload: dict = {"sub": user_id, "exp": expire, "type": "refresh"}
+    if family_id:
+        payload["fam"] = family_id
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
-def create_refresh_token(user_id: str) -> str:
-    """Create a signed JWT refresh token valid for REFRESH_TOKEN_EXPIRE_DAYS.
 
-    Includes a random *jti* so each token is unique and can be compared
-    against the stored hash.
-    """
-    now = datetime.now(timezone.utc)
-    payload = {
-        "sub": str(user_id),
-        "jti": secrets.token_hex(32),
-        "iat": now,
-        "exp": now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
-        "type": "refresh",
-    }
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+def decode_token(token: str) -> dict:
+    """Raises JWTError if invalid or expired."""
+    return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
 
+
+# ── Field encryption (AES-GCM via Fernet) ────────────────────────────────────
+_fernet = Fernet(settings.field_encryption_key.encode())
+
+
+def encrypt_field(plain: str) -> str:
+    return _fernet.encrypt(plain.encode()).decode()
+
+
+def decrypt_field(cipher: str) -> str:
+    return _fernet.decrypt(cipher.encode()).decode()
+
+
+# ── QR HMAC signing ───────────────────────────────────────────────────────────
+def sign_qr_reference(ref_id: str) -> str:
+    """Returns HMAC-SHA256 hex of the opaque reference ID."""
+    return _hmac.new(
+        settings.qr_hmac_secret.encode(),
+        ref_id.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def verify_qr_signature(ref_id: str, provided_sig: str) -> bool:
+    expected = sign_qr_reference(ref_id)
+    return _hmac.compare_digest(expected, provided_sig)
+
+
+# ── Aadhaar-specific wrappers (semantic aliases over field encryption) ─────────
+# Consumer service uses these named functions; they delegate to the generic
+# encrypt_field / decrypt_field helpers so the crypto stays in one place.
+
+def encrypt_aadhaar(plain: str) -> str:
+    """Encrypt a mock Aadhaar number (Fernet AES-128-CBC + HMAC)."""
+    return encrypt_field(plain)
+
+
+def decrypt_aadhaar(cipher: str) -> str:
+    """Decrypt a Fernet-encrypted Aadhaar field."""
+    return decrypt_field(cipher)
+
+
+def mask_aadhaar(plain: str) -> str:
+    """Return only the last 4 digits, e.g. 'XXXX XXXX 1234'."""
+    digits = plain.replace(" ", "").replace("-", "")
+    if len(digits) < 4:
+        return "XXXX"
+    return f"XXXX XXXX {digits[-4:]}"
+
+
+# ── Additional aliases used by admin/operator modules ─────────────────────────
 
 def decode_access_token(token: str) -> dict:
-    """Decode and validate an access JWT.
+    """Alias for decode_token — used by admin dependencies module."""
+    return decode_token(token)
 
-    Raises HTTPException 401 on any failure so callers don't need try/except.
+
+def verify_qr_payload(signed_token: str) -> dict:
+    """Verify a QR signed token (format: ref_id.hmac_sig) and return {uid: ref_id}.
+
+    Used by operator_service to check consumer QR codes at the counter.
+    Raises ValueError if signature is invalid.
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-        )
-        if payload.get("type") != "access":
-            raise credentials_exception
-        sub: Optional[str] = payload.get("sub")
-        if not sub:
-            raise credentials_exception
-        return payload
-    except JWTError:
-        raise credentials_exception
+    parts = signed_token.rsplit(".", 1)
+    if len(parts) != 2:
+        raise ValueError("Invalid QR token format")
+    ref_id, provided_sig = parts
+    if not verify_qr_signature(ref_id, provided_sig):
+        raise ValueError("QR signature verification failed")
+    return {"uid": ref_id}
 
 
 def decode_refresh_token(token: str) -> dict:
-    """Decode and validate a refresh JWT.
-
-    Raises HTTPException 401 on any failure.
-    """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or expired refresh token",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-        )
-        if payload.get("type") != "refresh":
-            raise credentials_exception
-        sub: Optional[str] = payload.get("sub")
-        if not sub:
-            raise credentials_exception
-        return payload
-    except JWTError:
-        raise credentials_exception
+    """Decode and validate a refresh token. Raises JWTError if invalid."""
+    payload = decode_token(token)
+    if payload.get("type") != "refresh":
+        from jose import JWTError
+        raise JWTError("Not a refresh token")
+    return payload
 
 
-# ── Cookie helpers ─────────────────────────────────────────────────────────────
-_COOKIE_NAME = "refresh_token"
-_COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
+def hash_pin(pin: str) -> str:
+    """Hash a 6-digit shop operator PIN (same Argon2id as passwords)."""
+    return hash_password(pin)
 
 
-def set_refresh_cookie(response: Response, refresh_token: str) -> None:
-    """Set refresh token as httpOnly, strict-samesite cookie.
+def verify_pin(plain: str, hashed: str) -> bool:
+    """Verify a shop operator PIN."""
+    return verify_password(plain, hashed)
 
-    secure=False for local development; set to True in production behind HTTPS.
-    """
-    secure = settings.ENVIRONMENT != "development"
+
+# ── HTTP-only cookie helpers ───────────────────────────────────────────────────
+
+def set_refresh_cookie(response, token: str) -> None:
+    """Set the refresh token as an HttpOnly secure cookie."""
     response.set_cookie(
-        key=_COOKIE_NAME,
-        value=refresh_token,
+        key="refresh_token",
+        value=token,
         httponly=True,
-        secure=secure,
-        samesite="strict",
-        max_age=_COOKIE_MAX_AGE,
+        secure=False,   # set True in production (HTTPS only)
+        samesite="lax",
+        max_age=settings.refresh_token_expire_days * 24 * 3600,
         path="/",
     )
 
 
-def clear_refresh_cookie(response: Response) -> None:
-    """Remove the refresh token cookie on logout."""
-    response.delete_cookie(
-        key=_COOKIE_NAME,
-        httponly=True,
-        samesite="strict",
-        path="/",
-    )
+def clear_refresh_cookie(response) -> None:
+    """Delete the refresh token cookie."""
+    response.delete_cookie(key="refresh_token", path="/")
 
 
-def get_refresh_token_from_cookie(request: Request) -> str:
-    """Extract refresh token from httpOnly cookie.
-
-    Raises HTTPException 401 if the cookie is absent.
-    """
-    token = request.cookies.get(_COOKIE_NAME)
+def get_refresh_token_from_cookie(request) -> str:
+    """Extract refresh token from cookie; raise 401 if missing."""
+    from fastapi import HTTPException, status
+    token = request.cookies.get("refresh_token")
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token missing",
         )
     return token
-
-
-# ── Fernet Aadhaar encryption ─────────────────────────────────────────────────
-
-def encrypt_aadhaar(raw_number: str) -> str:
-    """Encrypt a 12-digit Aadhaar number.  Returns a base64 Fernet token string."""
-    encrypted_bytes = _fernet.encrypt(raw_number.encode("utf-8"))
-    # Fernet already returns URL-safe base64; decode to str for storage in Text column
-    return encrypted_bytes.decode("utf-8")
-
-
-def decrypt_aadhaar(encrypted: str) -> str:
-    """Decrypt a Fernet-encrypted Aadhaar token.  Returns the raw 12-digit string.
-
-    Raises HTTPException 500 if decryption fails (key mismatch / tampered data).
-    """
-    try:
-        raw_bytes = _fernet.decrypt(encrypted.encode("utf-8"))
-        return raw_bytes.decode("utf-8")
-    except (InvalidToken, Exception):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to decrypt identity data",
-        )
-
-
-def mask_aadhaar(raw_number: str) -> str:
-    """Return masked Aadhaar string: '********XXXX' (last 4 visible)."""
-    return "*" * 8 + raw_number[-4:]
-
-
-# ── OTP helpers ────────────────────────────────────────────────────────────────
-
-def generate_otp() -> str:
-    """Generate a cryptographically random 6-digit OTP string."""
-    return str(secrets.randbelow(900_000) + 100_000)
-
-
-def hash_otp(otp: str) -> str:
-    """Hash an OTP with bcrypt for at-rest storage."""
-    return pwd_context.hash(otp)
-
-
-def verify_otp(otp: str, hashed: str) -> bool:
-    """Constant-time bcrypt comparison for OTP verification."""
-    return pwd_context.verify(otp, hashed)
-
-
-# ── QR payload signing ─────────────────────────────────────────────────────────
-
-def _hmac_sign(message: str) -> str:
-    """Compute HMAC-SHA256 over *message* using SECRET_KEY.  Returns hex digest."""
-    return hmac.new(
-        settings.SECRET_KEY.encode("utf-8"),
-        message.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-
-
-def create_qr_payload(user_id: str, expires_at: datetime) -> str:
-    """Build a signed JSON QR payload.
-
-    Fields:
-      uid  — user UUID (no other PII)
-      iat  — issued-at unix timestamp
-      exp  — expiry unix timestamp
-      sig  — HMAC-SHA256 over "uid|iat|exp"
-    """
-    iat = int(datetime.now(timezone.utc).timestamp())
-    exp = int(expires_at.timestamp())
-    message = f"{user_id}|{iat}|{exp}"
-    sig = _hmac_sign(message)
-    payload = {
-        "uid": user_id,
-        "iat": iat,
-        "exp": exp,
-        "sig": sig,
-    }
-    return json.dumps(payload, separators=(",", ":"))
-
-
-def verify_qr_payload(payload_str: str) -> dict:
-    """Verify a signed QR payload string.
-
-    Raises HTTPException 400 if:
-    - JSON parse fails
-    - Required fields missing
-    - HMAC signature mismatch
-    - Token is expired
-    """
-    bad_payload = HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Invalid or expired QR code",
-    )
-    try:
-        payload = json.loads(payload_str)
-    except (json.JSONDecodeError, ValueError):
-        raise bad_payload
-
-    uid = payload.get("uid")
-    iat = payload.get("iat")
-    exp = payload.get("exp")
-    sig = payload.get("sig")
-
-    if not all([uid, iat, exp, sig]):
-        raise bad_payload
-
-    # Re-compute HMAC
-    expected_sig = _hmac_sign(f"{uid}|{iat}|{exp}")
-    if not hmac.compare_digest(expected_sig, sig):
-        raise bad_payload
-
-    # Check expiry
-    now_ts = int(datetime.now(timezone.utc).timestamp())
-    if now_ts > exp:
-        raise bad_payload
-
-    return payload

@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import require_role, get_client_ip
@@ -26,12 +26,12 @@ class RecordPurchaseRequest(BaseModel):
 
 
 @router.post("/purchases", summary="Record a purchase (verifies limits, blocks if exceeded)")
-def record_purchase(
+async def record_purchase(
     body: RecordPurchaseRequest,
     current_user: User = Depends(require_role("OPERATOR")),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    return operator_service.record_purchase(
+    return await operator_service.record_purchase(
         consumer_user_id=body.consumer_user_id,
         product_name=body.product_name,
         quantity_ml=body.quantity_ml,
@@ -45,14 +45,14 @@ def record_purchase(
 
 
 @router.get("/purchases", summary="Shop purchase history (operator's shop only)")
-def get_shop_history(
+async def get_shop_history(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     date_filter: Optional[date] = Query(None, description="Filter by date (YYYY-MM-DD)"),
     current_user: User = Depends(require_role("OPERATOR")),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    return operator_service.get_shop_history(
+    return await operator_service.get_shop_history(
         operator=current_user,
         db=db,
         skip=skip,

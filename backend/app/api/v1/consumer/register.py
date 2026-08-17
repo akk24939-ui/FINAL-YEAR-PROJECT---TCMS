@@ -21,7 +21,7 @@ router = APIRouter(prefix="/register", tags=["Registration"])
 
 _ALLOWED_ID_MIMES = ["image/jpeg", "image/png", "application/pdf"]
 _ALLOWED_IMAGE_MIMES = ["image/jpeg", "image/png"]
-_MAX_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+_MAX_BYTES = settings.max_upload_size_mb * 1024 * 1024
 
 
 @router.post("/extract-id", response_model=RegisterExtractResponse)
@@ -43,7 +43,7 @@ async def extract_id(
     if len(raw_bytes) > _MAX_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large. Maximum allowed size is {settings.MAX_UPLOAD_SIZE_MB} MB.",
+            detail=f"File too large. Maximum allowed size is {settings.max_upload_size_mb} MB.",
         )
 
     # MIME validation from magic bytes
@@ -61,7 +61,7 @@ async def extract_id(
 
 @router.post("", status_code=201)
 @limiter.limit("5/hour")
-def register(
+async def register(
     request: Request,
     body: RegisterFinalRequest,
     ip: str = Depends(get_client_ip),
@@ -73,7 +73,7 @@ def register(
     - Creates User, ConsumerProfile, SelfRestriction, UserRole_ in one transaction.
     - Returns generic error if email/mobile is already registered.
     """
-    user = auth_service.register_consumer(data=body, db=db, ip=ip)
+    user = await auth_service.register_consumer(data=body, db=db, ip=ip)
     return {
         "message": "Registration successful. Please verify your mobile number to activate your account.",
         "user_id": str(user.id),

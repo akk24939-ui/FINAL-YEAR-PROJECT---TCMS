@@ -7,13 +7,13 @@ import type { OcrExtractResponse, RegisterFinalRequest, Gender, OcrConfidence } 
 
 // ─── TN Districts ─────────────────────────────────────────────────────────────
 const TN_DISTRICTS = [
-  'Ariyalur','Chengalpattu','Chennai','Coimbatore','Cuddalore','Dharmapuri',
-  'Dindigul','Erode','Kallakurichi','Kanchipuram','Kanyakumari','Karur',
-  'Krishnagiri','Madurai','Mayiladuthurai','Nagapattinam','Namakkal','Nilgiris',
-  'Perambalur','Pudukkottai','Ramanathapuram','Ranipet','Salem','Sivaganga',
-  'Tenkasi','Thanjavur','Theni','Thoothukudi','Tiruchirappalli','Tirunelveli',
-  'Tirupattur','Tiruppur','Tiruvallur','Tiruvannamalai','Tiruvarur','Vellore',
-  'Viluppuram','Virudhunagar',
+  'Ariyalur', 'Chengalpattu', 'Chennai', 'Coimbatore', 'Cuddalore', 'Dharmapuri',
+  'Dindigul', 'Erode', 'Kallakurichi', 'Kanchipuram', 'Kanyakumari', 'Karur',
+  'Krishnagiri', 'Madurai', 'Mayiladuthurai', 'Nagapattinam', 'Namakkal', 'Nilgiris',
+  'Perambalur', 'Pudukkottai', 'Ramanathapuram', 'Ranipet', 'Salem', 'Sivaganga',
+  'Tenkasi', 'Thanjavur', 'Theni', 'Thoothukudi', 'Tiruchirappalli', 'Tirunelveli',
+  'Tirupattur', 'Tiruppur', 'Tiruvallur', 'Tiruvannamalai', 'Tiruvarur', 'Vellore',
+  'Viluppuram', 'Virudhunagar',
 ]
 
 // ─── Age validation ───────────────────────────────────────────────────────────
@@ -36,8 +36,16 @@ const schema = z.object({
   gender: z.enum(['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY'] as const),
   aadhaar_number: z
     .string()
-    .regex(/^\d{12}$/, 'Aadhaar must be exactly 12 digits'),
-  email: z.string().email('Enter a valid email address'),
+    // Strip spaces/dashes/asterisks so partial-masked values still validate cleanly
+    .transform((val) => val.replace(/[^\d]/g, ''))
+    .refine((val) => /^\d{12}$/.test(val), { message: 'Aadhaar must be exactly 12 digits' }),
+  email: z
+    .string()
+    .optional()
+    .or(z.literal(''))
+    .refine((val) => !val || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val), {
+      message: 'Enter a valid email address',
+    }),
   mobile_number: z
     .string()
     .regex(/^[6-9]\d{9}$/, 'Enter a valid 10-digit Indian mobile number'),
@@ -54,8 +62,8 @@ const ConfidenceBadge: React.FC<{ score: number }> = ({ score }) => {
     pct >= 80
       ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
       : pct >= 50
-      ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-      : 'bg-red-500/20 text-red-400 border-red-500/30'
+        ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+        : 'bg-red-500/20 text-red-400 border-red-500/30'
   return (
     <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded border ${color}`}>
       {pct >= 80 ? '✓' : '!'} {pct}%
@@ -178,12 +186,12 @@ const StepB_ReviewForm: React.FC<Props> = ({ ocrData, onComplete, onBack }) => {
         </Field>
 
         {/* Email */}
-        <Field label="Email Address" error={errors.email?.message}>
+        <Field label="Email Address (optional)" error={errors.email?.message}>
           <input
             className={inputCls}
             {...register('email')}
             type="email"
-            placeholder="you@example.com"
+            placeholder="you@example.com (optional)"
           />
         </Field>
 

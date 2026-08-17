@@ -31,21 +31,25 @@ class RegisterExtractResponse(BaseModel):
     confidence: OcrConfidence
 
 
-# ── Final Registration (Step D) ────────────────────────────────────────────
+# ── Final Registration (Step D) ────────────────────────────────────
 class RegisterFinalRequest(BaseModel):
-    """Final payload submitted by the user after reviewing OCR data."""
-    email: EmailStr
+    """Final payload submitted by the user after reviewing OCR data.
+
+    Aadhaar number is the PRIMARY unique identifier.
+    Email is optional — if omitted, a placeholder is auto-generated server-side.
+    """
+    email: Optional[str] = None              # Optional — Aadhaar is the primary key
     mobile_number: str = Field(..., pattern=r"^\d{10}$")
     password: str = Field(
         ...,
         min_length=6,
-        description="Min 10 chars, server-side strength validated."
+        description="Min 6 chars, server-side strength validated."
     )
     
     full_name: str = Field(..., min_length=2, max_length=200)
     dob: date
     gender: Gender
-    aadhaar_number: str = Field(..., pattern=r"^\d{12}$", description="Raw 12-digit number")
+    aadhaar_number: str = Field(..., pattern=r"^\d{12}$", description="Raw 12-digit number — primary identifier")
     district: str
     address: Optional[str] = None
 

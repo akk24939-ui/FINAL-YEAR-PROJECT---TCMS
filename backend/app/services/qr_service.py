@@ -1,117 +1,132 @@
-"""QR service — signed QR code generation.
+"""
+QR service: issue signed tokens and verify them.
 
-Security design:
-- QR payload is an HMAC-SHA256-signed JSON blob.
-- RAW personal data (name, Aadhaar, phone) is NEVER embedded in the QR.
-- Only one active QR per user at a time; previous ones are deactivated on each request.
-- The QR image is returned as a base64-encoded PNG string so nothing is written to disk.
+Security Notes:
+  - Signed token = HMAC-SHA256 — opaque, never contains raw consumer data.
+  - 15-minute TTL enforced server-side.
+  - Only one active QR per user at a time.
 """
 from __future__ import annotations
 
-import base64
-import io
+import json
+import uuid
+import hashlib
+import hmac
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+import io
+import base64
 
-import qrcode  # type: ignore[import]
-from fastapi import Request
-from sqlalchemy.orm import Session
+import qrcode
+from fastapi import HTTPException, status
+from sqlalchemy import update, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import create_qr_payload
-from app.models.audit_log import AuditEventType, AuditLog
 from app.models.qr_code import QrCode
 from app.models.user import User
 
 
-def _write_audit(
-    db: Session,
-    event_type: AuditEventType,
-    *,
-    user_id,
-    description: Optional[str] = None,
-    ip_address: Optional[str] = None,
-) -> None:
-    try:
-        log = AuditLog(
-            user_id=user_id,
-            event_type=event_type,
-            description=description,
-            ip_address=ip_address,
+QR_TTL_MINUTES = 15
+
+
+class QRService:
+
+    def _build_payload(self, user_id: str) -> tuple[str, datetime, datetime]:
+        """Build an HMAC-signed payload. Returns (hmac_payload_json, issued_at, expires_at)."""
+        now_utc = datetime.now(timezone.utc)
+        expires_at = now_utc + timedelta(minutes=QR_TTL_MINUTES)
+
+        # Build the data object to sign
+        data = {
+            "uid": user_id,
+            "iat": int(now_utc.timestamp()),
+            "exp": int(expires_at.timestamp()),
+        }
+        data_str = json.dumps(data, sort_keys=True)
+
+        # HMAC-SHA256 signature
+        secret = settings.qr_hmac_secret.encode()
+        sig = hmac.new(secret, data_str.encode(), hashlib.sha256).hexdigest()
+        data["sig"] = sig
+
+        return json.dumps(data), now_utc, expires_at
+
+    async def issue(self, db: AsyncSession, user: User) -> dict:
+        """Invalidate old tokens and issue a fresh signed QR."""
+        # Deactivate all previous QRs for this user
+        await db.execute(
+            update(QrCode)
+            .where(QrCode.user_id == user.id, QrCode.is_active == True)  # noqa
+            .values(is_active=False)
         )
-        db.add(log)
-        db.flush()
-    except Exception:
-        pass
 
+        hmac_payload, issued_at, expires_at = self._build_payload(str(user.id))
 
-def _qr_to_base64_png(payload_str: str) -> str:
-    """Generate a QR code image from *payload_str* and return as base64 PNG."""
-    qr = qrcode.QRCode(
-        version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(payload_str)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode("utf-8")
+        qr_record = QrCode(
+            user_id=user.id,
+            hmac_payload=hmac_payload,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            is_active=True,
+        )
+        db.add(qr_record)
+        await db.flush()
 
+        # Generate QR image as base64 PNG
+        qr_img = qrcode.make(hmac_payload)
+        buf = io.BytesIO()
+        qr_img.save(buf, format="PNG")
+        qr_b64 = base64.b64encode(buf.getvalue()).decode()
 
-def generate_qr(
-    user: User,
-    request: Request,
-    db: Session,
-) -> tuple[str, QrCode]:
-    """Deactivate old QR codes, generate a new signed QR, persist record.
+        return {
+            "id": qr_record.id,
+            "hmac_payload": hmac_payload,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+            "qr_image_base64": qr_b64,
+        }
 
-    Returns:
-        (base64_png_image_string, qr_code_db_record)
-    """
-    client_ip = (
-        request.client.host if request.client else "unknown"
-    )
+    async def verify(self, db: AsyncSession, hmac_payload: str) -> User:
+        """Verify QR payload and return the user. Marks QR as inactive."""
+        bad = HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid or expired QR code",
+        )
 
-    # Deactivate all existing active QR codes for this user
-    db.query(QrCode).filter(
-        QrCode.user_id == user.id,
-        QrCode.is_active == True,  # noqa: E712
-    ).update({"is_active": False})
-    db.flush()
+        try:
+            data = json.loads(hmac_payload)
+            provided_sig = data.pop("sig", None)
+            if not provided_sig:
+                raise bad
+            data_str = json.dumps(data, sort_keys=True)
+            secret = settings.qr_hmac_secret.encode()
+            expected_sig = hmac.new(secret, data_str.encode(), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected_sig, provided_sig):
+                raise bad
+        except (json.JSONDecodeError, Exception):
+            raise bad
 
-    # Compute expiry
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(seconds=settings.QR_TTL_SECONDS)
+        # Check expiry
+        if data.get("exp", 0) < time.time():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="QR code expired",
+            )
 
-    # Build HMAC-signed payload
-    payload_str = create_qr_payload(str(user.id), expires_at)
+        # Fetch from DB
+        result = await db.execute(
+            select(QrCode).where(QrCode.hmac_payload == hmac_payload, QrCode.is_active == True)  # noqa
+        )
+        record = result.scalar_one_or_none()
+        if not record:
+            raise bad
 
-    # Generate QR image in memory
-    base64_image = _qr_to_base64_png(payload_str)
+        record.is_active = False
+        await db.flush()
 
-    # Persist QR record
-    qr_record = QrCode(
-        user_id=user.id,
-        hmac_payload=payload_str,
-        issued_at=now,
-        expires_at=expires_at,
-        is_active=True,
-        requested_from_ip=client_ip,
-    )
-    db.add(qr_record)
-
-    _write_audit(
-        db,
-        AuditEventType.QR_GENERATED,
-        user_id=user.id,
-        description="QR code generated",
-        ip_address=client_ip,
-    )
-
-    db.commit()
-    db.refresh(qr_record)
-    return base64_image, qr_record
+        from app.models.user import User
+        user_result = await db.execute(
+            select(User).where(User.id == record.user_id)
+        )
+        return user_result.scalar_one()

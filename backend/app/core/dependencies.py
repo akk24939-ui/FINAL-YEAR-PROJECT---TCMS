@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import decode_access_token
@@ -20,9 +21,9 @@ from app.models.user import User, UserRole
 security = HTTPBearer()
 
 
-def get_current_user(
+async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> User:
     """Resolve the authenticated user from the Bearer token.
 
@@ -35,7 +36,8 @@ def get_current_user(
     user_id: str = payload["sub"]
     token_version_claim: int = payload.get("token_version", 0)
 
-    user: User | None = db.query(User).filter(User.id == user_id).first()
+    result = await db.execute(select(User).where(User.id == user_id))
+    user: User | None = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -69,7 +71,7 @@ def get_current_user(
 
 def require_role(*roles: str):
     """Factory: returns a FastAPI dependency that enforces one of the given roles."""
-    def _check(current_user: User = Depends(get_current_user)) -> User:
+    async def _check(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role.value not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -81,7 +83,7 @@ def require_role(*roles: str):
 
 # ── Role-specific convenience dependencies ────────────────────────────────────
 
-def get_current_consumer(current_user: User = Depends(get_current_user)) -> User:
+async def get_current_consumer(current_user: User = Depends(get_current_user)) -> User:
     """Verify the authenticated user carries the CONSUMER role."""
     if current_user.role != UserRole.CONSUMER:
         raise HTTPException(
@@ -91,7 +93,7 @@ def get_current_consumer(current_user: User = Depends(get_current_user)) -> User
     return current_user
 
 
-def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+async def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     """Verify the authenticated user carries the ADMIN role."""
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
@@ -101,7 +103,7 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-def get_current_operator(current_user: User = Depends(get_current_user)) -> User:
+async def get_current_operator(current_user: User = Depends(get_current_user)) -> User:
     """Verify the authenticated user carries the OPERATOR role."""
     if current_user.role != UserRole.OPERATOR:
         raise HTTPException(
@@ -111,17 +113,32 @@ def get_current_operator(current_user: User = Depends(get_current_user)) -> User
     return current_user
 
 
-def get_current_doctor(current_user: User = Depends(get_current_user)) -> User:
-    """Verify the authenticated user carries the DOCTOR role."""
+async def get_current_doctor(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Verify the authenticated user carries the DOCTOR role AND profile is active.
+
+    Two-layer check:
+    1. User.is_active — handled by get_current_user above
+    2. DoctorProfile.is_active — admin explicitly activates/deactivates the clinical profile
+       This means an admin can deactivate a doctor's clinical access without deleting their account.
+    """
     if current_user.role != UserRole.DOCTOR:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access restricted to doctor accounts",
         )
-    # Also check DoctorProfile.is_active
     from app.models.doctor_profile import DoctorProfile
-    from app.core.database import SessionLocal
-    # Use the already-resolved user's session via the dependency chain
+    result = await db.execute(
+        select(DoctorProfile).where(DoctorProfile.user_id == current_user.id)
+    )
+    profile = result.scalar_one_or_none()
+    if not profile or not profile.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Doctor account is not yet activated. Contact the administrator.",
+        )
     return current_user
 
 

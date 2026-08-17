@@ -55,14 +55,17 @@ _MOCK_DISTRICTS = ["Chennai", "Coimbatore", "Madurai", "Salem", "Trichy"]
 
 def _mock_response() -> RegisterExtractResponse:
     """Return realistic mock OCR data for demo purposes."""
-    mock_aadhaar_digits = "".join(random.choices(string.digits, k=12))
-    masked = "*" * 8 + mock_aadhaar_digits[-4:]
+    # Generate a valid-looking Aadhaar: must start with 2-9
+    first_digit = str(random.randint(2, 9))
+    rest_digits = "".join(random.choices(string.digits, k=11))
+    mock_aadhaar_digits = first_digit + rest_digits
 
     return RegisterExtractResponse(
         full_name=random.choice(_MOCK_NAMES),
         dob=date(1990, random.randint(1, 12), random.randint(1, 28)),
         gender=random.choice([Gender.MALE, Gender.FEMALE]),
-        aadhaar_number=masked,
+        # Return the raw 12-digit number — masking happens at display/profile level
+        aadhaar_number=mock_aadhaar_digits,
         address=random.choice(_MOCK_ADDRESSES),
         district=random.choice(_MOCK_DISTRICTS),
         source="OCR",
@@ -234,10 +237,6 @@ def extract_from_image(image_bytes: bytes) -> RegisterExtractResponse:
     name, name_conf           = _extract_name(text)
     address, addr_conf        = _extract_address(text)
 
-    masked_aadhaar: Optional[str] = None
-    if raw_aadhaar:
-        masked_aadhaar = "*" * 8 + raw_aadhaar[-4:]
-
     # If OCR returned nothing useful → use mock (bad image quality)
     if not any([name, dob, raw_aadhaar]):
         return _mock_response()
@@ -246,7 +245,8 @@ def extract_from_image(image_bytes: bytes) -> RegisterExtractResponse:
         full_name=name,
         dob=dob,
         gender=gender,
-        aadhaar_number=masked_aadhaar,
+        # Return raw 12-digit number — masking happens at display/profile level only
+        aadhaar_number=raw_aadhaar,
         address=address,
         district=None,
         source="OCR",

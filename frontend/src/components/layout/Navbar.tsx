@@ -17,24 +17,38 @@ const Navbar: React.FC = () => {
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
+  // Close mobile menu whenever theme changes
+  useEffect(() => {
+    setMenuOpen(false)
+  }, [theme])
+
   const navLinks = [
-    { label: t('nav_home'), href: '/#home' },
-    { label: t('nav_about'), href: '/#about' },
+    { label: t('nav_home'),     href: '/#home' },
+    { label: t('nav_about'),    href: '/#about' },
     { label: t('nav_features'), href: '/#features' },
   ]
 
-  // Design tokens
-  const navBg = scrolled
+  // ── Design tokens ──────────────────────────────────────────────────────────
+  // Always give a solid background so nav is never invisible
+  const navBg = isDark
+    ? scrolled ? 'rgba(13,31,26,0.97)' : 'rgba(13,31,26,0.90)'
+    : scrolled ? 'rgba(255,255,255,0.97)' : 'rgba(255,255,255,0.92)'
+
+  const navBorder = isDark
+    ? 'rgba(212,175,55,0.12)'
+    : 'rgba(26,60,52,0.12)'
+
+  const navShadow = scrolled
     ? isDark
-      ? 'rgba(13,31,26,0.95)'
-      : 'rgba(255,255,255,0.96)'
-    : 'transparent'
-  const navBorder = scrolled
-    ? isDark ? 'rgba(212,175,55,0.12)' : 'rgba(26,60,52,0.10)'
-    : 'transparent'
-  const textColor  = isDark ? '#D1FAE5' : '#064E3B'
-  const logoText   = '#F97316'
-  const mutedText  = isDark ? '#6B7280' : '#6B7280'
+      ? '0 4px 24px rgba(0,0,0,0.4)'
+      : '0 4px 24px rgba(26,60,52,0.12)'
+    : isDark
+      ? '0 1px 0 rgba(212,175,55,0.08)'
+      : '0 1px 0 rgba(26,60,52,0.08)'
+
+  const textColor = isDark ? '#D1FAE5' : '#064E3B'
+  const logoText  = '#F97316'
+  const mutedText = '#6B7280'
 
   return (
     <nav
@@ -42,26 +56,22 @@ const Navbar: React.FC = () => {
       style={{
         background: navBg,
         borderBottom: `1px solid ${navBorder}`,
-        backdropFilter: scrolled ? 'blur(16px)' : 'none',
-        WebkitBackdropFilter: scrolled ? 'blur(16px)' : 'none',
-        boxShadow: scrolled
-          ? isDark
-            ? '0 4px 24px rgba(0,0,0,0.4)'
-            : '0 4px 24px rgba(26,60,52,0.10)'
-          : 'none',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        boxShadow: navShadow,
       }}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
 
-          {/* ── Logo ── */}
+          {/* ── Logo ─────────────────────────────────────────────────────── */}
           <Link to="/" className="flex items-center gap-2.5 group" aria-label="Smart TASMAC home">
             <div
               className="flex items-center justify-center transition-all group-hover:scale-105 rounded-full bg-white border-2 shrink-0"
               style={{
                 borderColor: isDark ? '#D4AF37' : '#1A3C34',
                 boxShadow: isDark ? '0 0 15px rgba(212,175,55,0.3)' : '0 2px 10px rgba(26,60,52,0.15)',
-                width: '46px', height: '46px'
+                width: '46px', height: '46px',
               }}
             >
               <img src="/tn_logo(1).webp" alt="TN Govt Logo" className="w-full h-full object-contain p-1 rounded-full" />
@@ -79,7 +89,7 @@ const Navbar: React.FC = () => {
             </div>
           </Link>
 
-          {/* ── Desktop Nav Links ── */}
+          {/* ── Desktop Nav Links ─────────────────────────────────────────── */}
           <div className="hidden md:flex items-center gap-8">
             {navLinks.map((link) => (
               <a
@@ -93,7 +103,7 @@ const Navbar: React.FC = () => {
             ))}
           </div>
 
-          {/* ── Right Controls ── */}
+          {/* ── Right Controls ────────────────────────────────────────────── */}
           <div className="flex items-center gap-2">
 
             {/* Language Toggle */}
@@ -112,7 +122,7 @@ const Navbar: React.FC = () => {
               {lang === 'en' ? 'தமிழ்' : 'EN'}
             </button>
 
-            {/* ── Theme Toggle — THE STAR OF THE SHOW ── */}
+            {/* Theme Toggle */}
             <button
               id="theme-toggle"
               onClick={toggleTheme}
@@ -131,19 +141,13 @@ const Navbar: React.FC = () => {
               title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             >
               {isDark ? (
-                <>
-                  <Sun className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Light</span>
-                </>
+                <><Sun className="w-3.5 h-3.5" /><span className="hidden sm:inline">Light</span></>
               ) : (
-                <>
-                  <Moon className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Dark</span>
-                </>
+                <><Moon className="w-3.5 h-3.5" /><span className="hidden sm:inline">Dark</span></>
               )}
             </button>
 
-            {/* Auth Buttons (desktop) */}
+            {/* Auth Buttons — desktop only */}
             <Link
               to="/login"
               id="nav-login"
@@ -175,18 +179,19 @@ const Navbar: React.FC = () => {
                 borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(26,60,52,0.20)',
                 background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(26,60,52,0.04)',
               }}
-              onClick={() => setMenuOpen(!menuOpen)}
+              onClick={() => setMenuOpen(prev => !prev)}
               aria-label="Toggle mobile menu"
+              aria-expanded={menuOpen}
             >
               {menuOpen
-                ? <X className="w-5 h-5" style={{ color: '#F97316' }} />
+                ? <X    className="w-5 h-5" style={{ color: '#F97316' }} />
                 : <Menu className="w-5 h-5" style={{ color: isDark ? '#D1FAE5' : '#1A3C34' }} />
               }
             </button>
           </div>
         </div>
 
-        {/* ── Mobile Menu ── */}
+        {/* ── Mobile Menu dropdown ──────────────────────────────────────────── */}
         {menuOpen && (
           <div
             className="md:hidden py-4 border-t"
@@ -206,6 +211,7 @@ const Navbar: React.FC = () => {
             <div className="flex gap-3 pt-4">
               <Link
                 to="/login"
+                onClick={() => setMenuOpen(false)}
                 className="flex-1 text-center py-2.5 border rounded-xl text-sm font-semibold transition-all"
                 style={{
                   borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(26,60,52,0.20)',
@@ -216,6 +222,7 @@ const Navbar: React.FC = () => {
               </Link>
               <Link
                 to="/register"
+                onClick={() => setMenuOpen(false)}
                 className="flex-1 text-center py-2.5 rounded-xl text-sm font-bold text-white"
                 style={{ background: 'linear-gradient(135deg, #1A3C34, #2D6A4F)' }}
               >

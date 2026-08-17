@@ -25,15 +25,27 @@ let _refreshing = false
 let _refreshWaiters: Array<(token: string) => void> = []
 let _refreshFailWaiters: Array<(err: unknown) => void> = []
 
+const ADMIN_AUTH_BYPASS = [
+  '/api/v1/admin/auth/login',
+  '/api/v1/admin/auth/refresh',
+  '/api/v1/admin/auth/logout',
+  '/api/v1/admin/auth/change-password',
+]
+const isAdminAuthUrl = (url?: string) =>
+  ADMIN_AUTH_BYPASS.some((b) => url?.includes(b))
+
 adminClient.interceptors.response.use(
   (r) => r,
   async (err) => {
     const original = err.config
+
+    // Never intercept auth endpoints
+    if (isAdminAuthUrl(original?.url)) return Promise.reject(err)
+
     if (err.response?.status === 401 && !original._retry) {
       original._retry = true
 
       if (_refreshing) {
-        // Wait for the in-flight refresh to complete
         return new Promise((resolve, reject) => {
           _refreshWaiters.push((token) => {
             original.headers.Authorization = `Bearer ${token}`
@@ -103,12 +115,14 @@ export const adminShopsApi = {
 export const adminDoctorsApi = {
   list: (params?: { is_active?: boolean; skip?: number; limit?: number }) =>
     adminClient.get<DoctorsResponse>('/api/v1/admin/doctors', { params }),
-  create: (data: CreateDoctorPayload) =>
+  create: (data: CreateDoctorPayload & { initial_password?: string }) =>
     adminClient.post<CreateDoctorResponse>('/api/v1/admin/doctors', data),
   activate: (doctorUserId: string) =>
     adminClient.post(`/api/v1/admin/doctors/${doctorUserId}/activate`),
   deactivate: (doctorUserId: string, reason: string, revoke_tokens = true) =>
     adminClient.post(`/api/v1/admin/doctors/${doctorUserId}/deactivate`, { reason, revoke_tokens }),
+  resetPassword: (doctorUserId: string, new_password: string) =>
+    adminClient.post(`/api/v1/admin/doctors/${doctorUserId}/reset-password`, { new_password }),
 }
 
 export const adminConsumersApi = {

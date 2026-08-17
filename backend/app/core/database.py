@@ -1,33 +1,33 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from sqlalchemy.pool import StaticPool
-from app.core.config import settings
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.orm import DeclarativeBase
+from app.core.config import get_settings
 
+settings = get_settings()
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    echo=settings.ENVIRONMENT == "development",
+engine = create_async_engine(
+    settings.database_url,
+    echo=settings.debug,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+AsyncSessionLocal = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def create_tables():
-    """Create all tables defined in models."""
-    import app.models  # noqa: F401 — imports all models so Base sees them
-    Base.metadata.create_all(bind=engine)
+async def get_db() -> AsyncSession:  # type: ignore[return]
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise

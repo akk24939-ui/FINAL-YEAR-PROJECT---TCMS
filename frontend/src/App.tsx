@@ -3,46 +3,52 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import { useAdminAuthStore } from './store/adminAuthStore'
 import { useOperatorAuthStore } from './store/operatorAuthStore'
+import { useDoctorAuthStore } from './store/doctorAuthStore'
 import { ThemeProvider } from './context/ThemeContext'
 import ConsumerLayout from './components/consumer/ConsumerLayout'
 import AdminLayout from './components/admin/AdminLayout'
 import ShopLayout from './components/operator/ShopLayout'
 
 // ── Lazy-loaded pages — Consumer ─────────────────────────────────────────────
-const LandingPage            = lazy(() => import('./pages/LandingPage'))
-const LoginPage              = lazy(() => import('./pages/LoginPage'))
-const RegisterPage           = lazy(() => import('./pages/consumer/register/RegisterPage'))
+const LandingPage = lazy(() => import('./pages/LandingPage'))
+const LoginPage = lazy(() => import('./pages/LoginPage'))
+const RegisterPage = lazy(() => import('./pages/consumer/register/RegisterPage'))
+const ForgotPasswordPage = lazy(() => import('./pages/consumer/ForgotPasswordPage'))
 
-const ConsumerDashboard      = lazy(() => import('./pages/consumer/ConsumerDashboard'))
-const ProfilePage            = lazy(() => import('./pages/consumer/profile/ProfilePage'))
-const LimitsPage             = lazy(() => import('./pages/consumer/limits/LimitsPage'))
-const TeetotalerPage         = lazy(() => import('./pages/consumer/teetotaler/TeetotalerPage'))
-const PurchaseHistoryPage    = lazy(() => import('./pages/consumer/purchases/PurchaseHistoryPage'))
-const QrPage                 = lazy(() => import('./pages/consumer/qr/QrPage'))
-const PdfDownloadPage        = lazy(() => import('./pages/consumer/pdf/PdfDownloadPage'))
-const RestrictionsPage       = lazy(() => import('./pages/consumer/restrictions/RestrictionsPage'))
-const NotificationsPage      = lazy(() => import('./pages/consumer/notifications/NotificationsPage'))
-const ReportPage             = lazy(() => import('./pages/consumer/report/ReportPage'))
+const ConsumerDashboard = lazy(() => import('./pages/consumer/ConsumerDashboard'))
+const ProfilePage = lazy(() => import('./pages/consumer/profile/ProfilePage'))
+const LimitsPage = lazy(() => import('./pages/consumer/limits/LimitsPage'))
+const TeetotalerPage = lazy(() => import('./pages/consumer/teetotaler/TeetotalerPage'))
+const PurchaseHistoryPage = lazy(() => import('./pages/consumer/purchases/PurchaseHistoryPage'))
+const QrPage = lazy(() => import('./pages/consumer/qr/QrPage'))
+const PdfDownloadPage = lazy(() => import('./pages/consumer/pdf/PdfDownloadPage'))
+const RestrictionsPage = lazy(() => import('./pages/consumer/restrictions/RestrictionsPage'))
+const NotificationsPage = lazy(() => import('./pages/consumer/notifications/NotificationsPage'))
+const ReportPage = lazy(() => import('./pages/consumer/report/ReportPage'))
 
 // ── Lazy-loaded pages — Auth portals ─────────────────────────────────────────
-const AdminLoginPageNew      = lazy(() => import('./pages/login/AdminLoginPage'))
-const ShopLoginPageNew       = lazy(() => import('./pages/login/ShopLoginPage'))
-const AdminLoginPage         = lazy(() => import('./pages/admin/AdminLoginPage'))
-const PortalLoginPage        = lazy(() => import('./pages/PortalLoginPage'))
+const AdminLoginPageNew = lazy(() => import('./pages/login/AdminLoginPage'))
+const ShopLoginPageNew = lazy(() => import('./pages/login/ShopLoginPage'))
+const DoctorLoginPageNew = lazy(() => import('./pages/login/DoctorLoginPage'))
+const AdminLoginPage = lazy(() => import('./pages/admin/AdminLoginPage'))
+const PortalLoginPage = lazy(() => import('./pages/PortalLoginPage'))
 
 // ── Lazy-loaded pages — Operator ──────────────────────────────────────────────
-const ShopLoginPage          = lazy(() => import('./pages/operator/ShopLoginPage'))
-const ShopDashboard          = lazy(() => import('./pages/operator/ShopDashboard'))
-const ScanAndSellPage        = lazy(() => import('./pages/operator/ScanAndSellPage'))
-const ShopHistoryPage        = lazy(() => import('./pages/operator/ShopHistoryPage'))
+const ShopLoginPage = lazy(() => import('./pages/operator/ShopLoginPage'))
+const ShopDashboard = lazy(() => import('./pages/operator/ShopDashboard'))
+const ScanAndSellPage = lazy(() => import('./pages/operator/ScanAndSellPage'))
+const ShopHistoryPage = lazy(() => import('./pages/operator/ShopHistoryPage'))
 const ShopChangePasswordPage = lazy(() => import('./pages/operator/ShopChangePasswordPage'))
-const OverviewPage           = lazy(() => import('./pages/admin/OverviewPage'))
-const ShopsPage              = lazy(() => import('./pages/admin/ShopsPage'))
-const DoctorsPage            = lazy(() => import('./pages/admin/DoctorsPage'))
-const ConsumersPage          = lazy(() => import('./pages/admin/ConsumersPage'))
-const GlobalLimitsPage       = lazy(() => import('./pages/admin/GlobalLimitsPage'))
-const AuditLogPage           = lazy(() => import('./pages/admin/AuditLogPage'))
-const ReportsPage            = lazy(() => import('./pages/admin/ReportsPage'))
+const OverviewPage = lazy(() => import('./pages/admin/OverviewPage'))
+const ShopsPage = lazy(() => import('./pages/admin/ShopsPage'))
+const DoctorsPage = lazy(() => import('./pages/admin/DoctorsPage'))
+const ConsumersPage = lazy(() => import('./pages/admin/ConsumersPage'))
+const GlobalLimitsPage = lazy(() => import('./pages/admin/GlobalLimitsPage'))
+const AuditLogPage = lazy(() => import('./pages/admin/AuditLogPage'))
+const ReportsPage = lazy(() => import('./pages/admin/ReportsPage'))
+
+// ── Lazy-loaded pages — Doctor ────────────────────────────────────────────────
+const DoctorDashboard = lazy(() => import('./pages/doctor/DoctorDashboard'))
 
 // ── Protected Route — Consumer ───────────────────────────────────────────────
 const ProtectedRoute: React.FC<{ children: React.ReactNode; role?: string }> = ({ children, role }) => {
@@ -66,6 +72,13 @@ const OperatorProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ child
   return <>{children}</>
 }
 
+// ── Protected Route — Doctor ──────────────────────────────────────────────────
+const DoctorProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated } = useDoctorAuthStore()
+  if (!isAuthenticated) return <Navigate to="/login/doctor" replace />
+  return <>{children}</>
+}
+
 // ── Loading spinner ───────────────────────────────────────────────────────────
 const PageLoader = () => (
   <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
@@ -82,13 +95,15 @@ const App: React.FC = () => (
     <Suspense fallback={<PageLoader />}>
       <Routes>
         {/* ── Public routes ─────────────────────────────────────────────── */}
-        <Route path="/"         element={<LandingPage />} />
-        <Route path="/login"    element={<LoginPage />} />
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
-        {/* ── Separate portal login pages (Feature 4) ───────────────────── */}
+        {/* ── Separate portal login pages ─────────────────────────────────── */}
         <Route path="/login/admin" element={<AdminLoginPageNew />} />
-        <Route path="/login/shop"  element={<ShopLoginPageNew />} />
+        <Route path="/login/shop" element={<ShopLoginPageNew />} />
+        <Route path="/login/doctor" element={<DoctorLoginPageNew />} />
 
         {/* ── Forced password change — accessible even without full auth ── */}
         <Route path="/shop/change-password" element={<ShopChangePasswordPage />} />
@@ -98,7 +113,7 @@ const App: React.FC = () => (
 
         {/* ── Legacy redirects → new dedicated pages ───────────────────────── */}
         <Route path="/admin/login" element={<Navigate to="/login/admin" replace />} />
-        <Route path="/shop/login"  element={<Navigate to="/login/shop" replace />} />
+        <Route path="/shop/login" element={<Navigate to="/login/shop" replace />} />
 
         {/* ── Admin portal (protected, role=ADMIN) ─────────────────────── */}
         <Route
@@ -109,12 +124,12 @@ const App: React.FC = () => (
             </AdminProtectedRoute>
           }
         >
-          <Route index          element={<OverviewPage />} />
-          <Route path="shops"   element={<ShopsPage />} />
+          <Route index element={<OverviewPage />} />
+          <Route path="shops" element={<ShopsPage />} />
           <Route path="doctors" element={<DoctorsPage />} />
           <Route path="consumers" element={<ConsumersPage />} />
-          <Route path="limits"  element={<GlobalLimitsPage />} />
-          <Route path="audit"   element={<AuditLogPage />} />
+          <Route path="limits" element={<GlobalLimitsPage />} />
+          <Route path="audit" element={<AuditLogPage />} />
           <Route path="reports" element={<ReportsPage />} />
         </Route>
 
@@ -127,10 +142,20 @@ const App: React.FC = () => (
             </OperatorProtectedRoute>
           }
         >
-          <Route index             element={<ShopDashboard />} />
-          <Route path="scan"       element={<ScanAndSellPage />} />
-          <Route path="history"    element={<ShopHistoryPage />} />
+          <Route index element={<ShopDashboard />} />
+          <Route path="scan" element={<ScanAndSellPage />} />
+          <Route path="history" element={<ShopHistoryPage />} />
         </Route>
+
+        {/* ── Doctor portal (protected, role=DOCTOR) ──────────────────── */}
+        <Route
+          path="/doctor"
+          element={
+            <DoctorProtectedRoute>
+              <DoctorDashboard />
+            </DoctorProtectedRoute>
+          }
+        />
 
         {/* ── Consumer module ───────────────────────────────────────────── */}
         <Route
@@ -141,16 +166,16 @@ const App: React.FC = () => (
             </ProtectedRoute>
           }
         >
-          <Route index               element={<ConsumerDashboard />} />
-          <Route path="profile"      element={<ProfilePage />} />
-          <Route path="limits"       element={<LimitsPage />} />
-          <Route path="teetotaler"   element={<TeetotalerPage />} />
-          <Route path="purchases"    element={<PurchaseHistoryPage />} />
+          <Route index element={<ConsumerDashboard />} />
+          <Route path="profile" element={<ProfilePage />} />
+          <Route path="limits" element={<LimitsPage />} />
+          <Route path="teetotaler" element={<TeetotalerPage />} />
+          <Route path="purchases" element={<PurchaseHistoryPage />} />
           <Route path="restrictions" element={<RestrictionsPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
-          <Route path="qr"           element={<QrPage />} />
-          <Route path="pdf"          element={<PdfDownloadPage />} />
-          <Route path="report"       element={<ReportPage />} />
+          <Route path="qr" element={<QrPage />} />
+          <Route path="pdf" element={<PdfDownloadPage />} />
+          <Route path="report" element={<ReportPage />} />
         </Route>
 
         {/* ── Catch-all ─────────────────────────────────────────────────── */}

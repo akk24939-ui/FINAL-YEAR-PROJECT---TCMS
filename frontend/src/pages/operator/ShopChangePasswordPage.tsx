@@ -13,6 +13,7 @@ import { z } from 'zod'
 import { Eye, EyeOff, Loader2, KeyRound, ShieldCheck, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { operatorAuthApi } from '../../api/operator.api'
 import { useOperatorAuthStore } from '../../store/operatorAuthStore'
+import { getErrorMessage } from '../../utils/getErrorMessage'
 
 // ─── Password policy regex (must match backend PASSWORD_POLICY) ───────────────
 const PASSWORD_POLICY = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};:'",./<>?]).{8,}$/
@@ -86,8 +87,7 @@ const ShopChangePasswordPage: React.FC = () => {
         navigate('/login/shop')
       }, 2500)
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setServerError(msg ?? 'Failed to change password. Please try again.')
+      setServerError(getErrorMessage(err, 'Failed to change password. Please try again.'))
     }
   }
 
@@ -189,7 +189,7 @@ const ShopChangePasswordPage: React.FC = () => {
                           background: i <= strengthScore
                             ? strengthScore <= 2 ? '#ef4444'
                               : strengthScore <= 3 ? '#f59e0b'
-                              : '#10b981'
+                                : '#10b981'
                             : 'rgba(255,255,255,0.1)',
                         }} />
                     ))}

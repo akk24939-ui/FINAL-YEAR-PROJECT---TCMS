@@ -10,6 +10,7 @@ import { Store, Eye, EyeOff, Loader2, AlertCircle, Sun, Moon, AlertTriangle } fr
 import { operatorAuthApi } from '../../api/operator.api'
 import { useOperatorAuthStore } from '../../store/operatorAuthStore'
 import { useTheme } from '../../hooks/useTheme'
+import { getErrorMessage } from '../../utils/getErrorMessage'
 
 const ShopLoginPage: React.FC = () => {
   const navigate = useNavigate()
@@ -59,8 +60,7 @@ const ShopLoginPage: React.FC = () => {
       setAuth(access_token, shop, pin_rotation_warning ?? null)
       navigate('/shop', { replace: true })
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(detail || 'Login failed. Check your shop code and PIN.')
+      setError(getErrorMessage(err, 'Login failed. Check your shop code and PIN.'))
       setPin(['', '', '', '', '', ''])
       pinRefs.current[0]?.focus()
     } finally {

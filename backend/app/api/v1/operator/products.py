@@ -1,6 +1,6 @@
 """Operator product catalogue endpoint."""
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import require_role
@@ -11,8 +11,8 @@ router = APIRouter()
 
 
 @router.get("/products", summary="Get TASMAC product catalogue for this shop")
-def get_products(
+async def get_products(
     current_user: User = Depends(require_role("OPERATOR")),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    return {"products": operator_service.get_products(db)}
+    return {"products": await operator_service.get_products(db)}

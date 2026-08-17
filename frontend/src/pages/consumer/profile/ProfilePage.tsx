@@ -12,7 +12,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import {
   User, Mail, Phone, MapPin, Calendar, Shield,
   Camera, Edit3, Save, X, Loader2, AlertCircle,
-  Heart, UserCheck, RefreshCw,
+  Heart, UserCheck, RefreshCw, Copy, CheckCheck,
 } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useConsumerProfile, PROFILE_QUERY_KEY } from '../../../hooks/useConsumerProfile'
@@ -89,8 +89,16 @@ const ProfilePage: React.FC = () => {
   const [photoLoading, setPhotoLoading] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [copied, setCopied] = useState(false)
   const photoInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
+
+  const copyId = (id: string) => {
+    navigator.clipboard.writeText(id).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
 
   // Sync form when profile loads
   useEffect(() => {
@@ -301,6 +309,36 @@ const ProfilePage: React.FC = () => {
             label="Beverage Preference"
             value={BEVERAGE_OPTIONS.find(o => o.value === profile.beverage_preference)?.label ?? profile.beverage_preference}
           />
+
+          {/* Consumer ID — needed for Manual ID lookup at shop */}
+          <div className="px-5 py-3 bg-gray-50/50 dark:bg-gray-800/30">
+            <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest">Consumer ID</p>
+          </div>
+          <div className="flex items-center gap-3 px-5 py-4">
+            <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center flex-shrink-0">
+              <Shield className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Your Unique Consumer ID</p>
+              <p className="text-xs font-mono text-gray-700 dark:text-gray-300 mt-0.5 break-all">{profile.user_id}</p>
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1">Share this with the shop operator if your QR code is unavailable</p>
+            </div>
+            <button
+              onClick={() => copyId(profile.user_id)}
+              className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all"
+              style={{
+                borderColor: copied ? '#10b981' : '#d1d5db',
+                color: copied ? '#10b981' : '#6b7280',
+                background: copied ? 'rgba(16,185,129,0.05)' : 'transparent',
+              }}
+              title="Copy Consumer ID"
+            >
+              {copied
+                ? <><CheckCheck className="w-3.5 h-3.5" />Copied!</>
+                : <><Copy className="w-3.5 h-3.5" />Copy</>
+              }
+            </button>
+          </div>
         </div>
       )}
 

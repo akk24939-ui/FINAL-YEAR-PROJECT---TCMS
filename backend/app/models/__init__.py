@@ -22,6 +22,9 @@ from app.models.qr_code import QrCode               # noqa: F401
 # Admin module
 from app.models.system_config import SystemConfig   # noqa: F401
 from app.models.doctor_profile import DoctorProfile # noqa: F401
+from app.models.doctor_restriction import (         # noqa: F401
+    DoctorRestriction, RestrictionCategory, RestrictionType, RestrictionStatus
+)
 
 # Audit / security
 from app.models.audit_log import AuditLog, AuditEventType  # noqa: F401
@@ -47,6 +50,7 @@ __all__ = [
     "QrCode",
     "SystemConfig",
     "DoctorProfile",
+    "DoctorRestriction", "RestrictionCategory", "RestrictionType", "RestrictionStatus",
     "AuditLog", "AuditEventType",
     "Shop", "Purchase", "Alert", "CaretakerLink",
     "LimitsHistory", "Product", "District", "HealthReport",

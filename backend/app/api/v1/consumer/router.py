@@ -12,6 +12,7 @@ from app.api.v1.consumer import (
     purchases,
     qr,
     register,
+    restrictions,
     teetotaler,
 )
 
@@ -29,3 +30,4 @@ router.include_router(purchases.router)
 router.include_router(qr.router)
 router.include_router(pdf.router)
 router.include_router(notifications.router)
+router.include_router(restrictions.router)  # doctor restriction visibility

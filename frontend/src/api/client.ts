@@ -3,9 +3,20 @@ import { useAuthStore } from '../store/authStore'
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
-  withCredentials: true, // CRITICAL — sends httpOnly refresh cookie on every request
+  withCredentials: true, // sends httpOnly refresh cookie on every request
   headers: { 'Content-Type': 'application/json' },
 })
+
+// ── Auth endpoints that must NEVER trigger the refresh interceptor ─────────────
+const AUTH_BYPASS_URLS = [
+  '/api/v1/auth/login',
+  '/api/v1/auth/refresh',
+  '/api/v1/auth/logout',
+  '/api/v1/shop-auth/login',
+  '/api/v1/admin-auth/login',
+]
+const isAuthUrl = (url?: string) =>
+  AUTH_BYPASS_URLS.some((bypass) => url?.includes(bypass))
 
 // ── Request interceptor: attach access token from in-memory store ─────────────
 apiClient.interceptors.request.use((config) => {
@@ -16,7 +27,7 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
-// ── Response interceptor: auto-refresh on 401 ────────────────────────────────
+// ── Response interceptor: auto-refresh on 401 (skips auth endpoints) ──────────
 let isRefreshing = false
 let failedQueue: Array<{ resolve: (v: string) => void; reject: (e: unknown) => void }> = []
 
@@ -29,6 +40,12 @@ apiClient.interceptors.response.use(
   (res) => res,
   async (error) => {
     const original = error.config
+
+    // Never intercept auth endpoints — let the caller handle their 401s directly
+    if (isAuthUrl(original?.url)) {
+      return Promise.reject(error)
+    }
+
     if (error.response?.status === 401 && !original._retry) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
@@ -38,6 +55,7 @@ apiClient.interceptors.response.use(
           return apiClient(original)
         })
       }
+
       original._retry = true
       isRefreshing = true
       try {
@@ -56,6 +74,7 @@ apiClient.interceptors.response.use(
         isRefreshing = false
       }
     }
+
     return Promise.reject(error)
   }
 )

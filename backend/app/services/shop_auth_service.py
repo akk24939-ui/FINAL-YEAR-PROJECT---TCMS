@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import verify_password, create_access_token, create_refresh_token, hash_password
 from app.models.audit_log import AuditLog, AuditEventType
@@ -22,11 +23,11 @@ from app.models.user import User
 
 MAX_PIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
-PIN_ROTATION_WARNING_DAYS = 7  # Warn if PIN rotation due within 7 days
+PIN_ROTATION_WARNING_DAYS = 7
 
 
 def _audit(
-    db: Session,
+    db: AsyncSession,
     event_type: str,
     user_id: Optional[uuid.UUID],
     description: str,
@@ -45,23 +46,19 @@ def _audit(
     db.add(log)
 
 
-def shop_login(
+async def shop_login(
     shop_code: str,
     pin: str,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> dict:
-    """
-    Authenticate shop operator by shop_code + PIN.
-
-    Returns access_token, refresh_token, shop info on success.
-    Raises HTTPException 401/403/423 on failure.
-    """
-    # Find shop by code
-    shop = db.query(Shop).filter(Shop.shop_code == shop_code.upper()).first()
+    """Authenticate shop operator by shop_code + PIN."""
+    shop_res = await db.execute(
+        select(Shop).where(Shop.shop_code == shop_code.upper())
+    )
+    shop = shop_res.scalar_one_or_none()
 
     if not shop:
-        # Don't leak whether shop_code exists — same error as wrong PIN
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid shop code or PIN",
@@ -73,10 +70,10 @@ def shop_login(
             detail="This shop has been suspended. Contact your district administrator.",
         )
 
-    # Get operator user (holds PIN hash)
     operator: Optional[User] = None
     if shop.operator_id:
-        operator = db.query(User).filter(User.id == shop.operator_id).first()
+        op_res = await db.execute(select(User).where(User.id == shop.operator_id))
+        operator = op_res.scalar_one_or_none()
 
     if not operator or not operator.pin_hash:
         raise HTTPException(
@@ -90,7 +87,6 @@ def shop_login(
             detail="Operator account is deactivated.",
         )
 
-    # Check lockout
     now = datetime.now(timezone.utc)
     if operator.pin_locked_until and operator.pin_locked_until > now:
         remaining = int((operator.pin_locked_until - now).total_seconds() // 60) + 1
@@ -99,7 +95,6 @@ def shop_login(
             detail=f"Too many failed attempts. Try again in {remaining} minute(s).",
         )
 
-    # Verify PIN
     pin_valid = verify_password(pin, operator.pin_hash)
 
     if not pin_valid:
@@ -123,7 +118,7 @@ def shop_login(
                 ip_address=ip_address,
             )
 
-        db.commit()
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid shop code or PIN. {MAX_PIN_ATTEMPTS - operator.pin_failed_attempts} attempt(s) remaining.",
@@ -135,12 +130,10 @@ def shop_login(
     operator.last_login_at = now
     operator.last_login_ip = ip_address
 
-    # Issue tokens
     access_token = create_access_token(str(operator.id), "OPERATOR")
     refresh_token = create_refresh_token(str(operator.id))
     operator.refresh_token_hash = hash_password(refresh_token[:72])
 
-    # Check PIN rotation warning
     pin_rotation_warning = None
     if shop.pin_rotation_due_at:
         days_until_rotation = (shop.pin_rotation_due_at - now).days
@@ -155,14 +148,14 @@ def shop_login(
         ip_address=ip_address,
     )
 
-    db.commit()
+    await db.commit()
 
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
         "must_change_password": operator.must_change_password,
-        "_operator_obj": operator,  # Used by endpoint to enforce expiry — stripped before response
+        "_operator_obj": operator,
         "shop": {
             "id": str(shop.id),
             "shop_code": shop.shop_code,

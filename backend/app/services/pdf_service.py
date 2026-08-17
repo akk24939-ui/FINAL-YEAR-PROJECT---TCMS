@@ -1,15 +1,4 @@
-"""PDF report service — generates a purchase history PDF entirely in memory.
-
-Libraries used:
-- pandas   : aggregate purchase data into a DataFrame.
-- matplotlib: render a bar chart of daily consumption.
-- fpdf2    : compose the PDF with header, table, chart, and footer.
-
-Security notes:
-- Nothing is written to disk — all operations use BytesIO buffers.
-- user identity comes from the JWT-validated User object (IDOR safe).
-- Aadhaar is masked before it appears anywhere in the document.
-"""
+"""PDF report service — generates a purchase history PDF entirely in memory."""
 from __future__ import annotations
 
 import io
@@ -19,7 +8,8 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_aadhaar, mask_aadhaar
 from app.models.audit_log import AuditEventType, AuditLog
@@ -40,23 +30,21 @@ except ImportError:
     _LIBS_AVAILABLE = False
 
 
-def _write_audit(
-    db: Session,
+async def _write_audit(
+    db: AsyncSession,
     event_type: AuditEventType,
     *,
     user_id,
     description: Optional[str] = None,
-    ip_address: Optional[str] = None,
 ) -> None:
     try:
         log = AuditLog(
             user_id=user_id,
             event_type=event_type,
             description=description,
-            ip_address=ip_address,
         )
         db.add(log)
-        db.flush()
+        await db.flush()
     except Exception:
         pass
 
@@ -93,16 +81,13 @@ def _build_bar_chart(df: "pd.DataFrame") -> bytes:
     return buf.read()
 
 
-def generate_pdf(
+async def generate_pdf(
     user: User,
     start_date: date,
     end_date: date,
-    db: Session,
+    db: AsyncSession,
 ) -> io.BytesIO:
-    """Generate a purchase history PDF for *user* between *start_date* and *end_date*.
-
-    Returns a BytesIO buffer containing the PDF bytes.
-    """
+    """Generate a purchase history PDF for *user* between *start_date* and *end_date*."""
     if not _LIBS_AVAILABLE:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -110,11 +95,10 @@ def generate_pdf(
         )
 
     # Fetch profile for masked Aadhaar
-    profile = (
-        db.query(ConsumerProfile)
-        .filter(ConsumerProfile.user_id == user.id)
-        .first()
+    profile_result = await db.execute(
+        select(ConsumerProfile).where(ConsumerProfile.user_id == user.id)
     )
+    profile = profile_result.scalar_one_or_none()
     masked_aadhaar = "XXXXXXXXXXXX"
     if profile and profile.aadhaar_encrypted:
         try:
@@ -127,16 +111,16 @@ def generate_pdf(
     start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
     end_dt = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=timezone.utc)
 
-    purchases = (
-        db.query(Purchase)
-        .filter(
+    purchases_result = await db.execute(
+        select(Purchase)
+        .where(
             Purchase.consumer_id == user.id,
             Purchase.purchased_at >= start_dt,
             Purchase.purchased_at <= end_dt,
         )
         .order_by(Purchase.purchased_at.asc())
-        .all()
     )
+    purchases = purchases_result.scalars().all()
 
     # Build DataFrame
     rows = [
@@ -156,8 +140,6 @@ def generate_pdf(
     # Build chart
     chart_bytes = _build_bar_chart(df)
 
-    # Save chart to temp file so FPDF can embed it
-    # (FPDF requires a file path for images)
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         tmp.write(chart_bytes)
         chart_path = tmp.name
@@ -167,7 +149,6 @@ def generate_pdf(
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
 
-        # ── Header ──────────────────────────────────────────────────────────────
         pdf.set_font("Helvetica", "B", 18)
         pdf.cell(0, 10, "Smart TASMAC — Purchase History Report", ln=True, align="C")
         pdf.set_font("Helvetica", "", 11)
@@ -180,7 +161,6 @@ def generate_pdf(
         )
         pdf.ln(5)
 
-        # ── Summary ────────────────────────────────────────────────────────────
         total_ml = df["quantity_ml"].sum() if not df.empty else 0
         total_sd = round(df["standard_drinks"].sum(), 2) if not df.empty else 0.0
         total_spend = round(df["price"].sum(), 2) if not df.empty else 0.0
@@ -190,24 +170,22 @@ def generate_pdf(
         pdf.set_font("Helvetica", "", 11)
         pdf.cell(0, 7, f"Total Volume: {total_ml} ml", ln=True)
         pdf.cell(0, 7, f"Total Standard Drinks: {total_sd}", ln=True)
-        pdf.cell(0, 7, f"Total Spent: ₹{total_spend}", ln=True)
+        pdf.cell(0, 7, f"Total Spent: \u20b9{total_spend}", ln=True)
         pdf.ln(5)
 
-        # ── Chart ──────────────────────────────────────────────────────────────
         pdf.set_font("Helvetica", "B", 12)
         pdf.cell(0, 8, "Daily Consumption", ln=True)
         available_width = pdf.w - pdf.l_margin - pdf.r_margin
         pdf.image(chart_path, x=pdf.l_margin, w=available_width, h=60)
         pdf.ln(5)
 
-        # ── Table ──────────────────────────────────────────────────────────────
         pdf.set_font("Helvetica", "B", 12)
         pdf.cell(0, 8, "Transaction Details", ln=True)
 
         col_widths = [38, 62, 30, 25, 30]
-        headers = ["Date", "Product", "Volume (ml)", "Std Drinks", "Price (₹)"]
+        headers = ["Date", "Product", "Volume (ml)", "Std Drinks", "Price (\u20b9)"]
         pdf.set_font("Helvetica", "B", 9)
-        pdf.set_fill_color(37, 99, 235)  # blue header
+        pdf.set_fill_color(37, 99, 235)
         pdf.set_text_color(255, 255, 255)
         for i, h in enumerate(headers):
             pdf.cell(col_widths[i], 8, h, border=1, fill=True, align="C")
@@ -239,17 +217,13 @@ def generate_pdf(
             pdf.set_font("Helvetica", "I", 10)
             pdf.cell(0, 10, "No purchases found for the selected date range.", ln=True, align="C")
 
-        # ── Footer ─────────────────────────────────────────────────────────────
         pdf.ln(10)
         pdf.set_font("Helvetica", "I", 8)
         pdf.set_text_color(120, 120, 120)
         pdf.multi_cell(
-            0,
-            5,
+            0, 5,
             "DISCLAIMER: This report is generated for personal reference only. "
-            "The data reflects purchases recorded in the Smart TASMAC system. "
-            "If you notice any discrepancies, please contact TASMAC support. "
-            "Drinking responsibly is your responsibility.",
+            "The data reflects purchases recorded in the Smart TASMAC system.",
         )
         pdf.cell(
             0, 5,
@@ -258,7 +232,6 @@ def generate_pdf(
             align="R",
         )
 
-        # ── Render to BytesIO ──────────────────────────────────────────────────
         pdf_bytes = pdf.output()
         output_buf = io.BytesIO(bytes(pdf_bytes))
         output_buf.seek(0)
@@ -269,13 +242,12 @@ def generate_pdf(
         except OSError:
             pass
 
-    # Audit — write AFTER PDF bytes are ready
-    _write_audit(
+    await _write_audit(
         db,
         AuditEventType.PDF_DOWNLOADED,
         user_id=user.id,
         description="Purchase history PDF downloaded",
     )
-    db.commit()
+    await db.commit()
 
     return output_buf

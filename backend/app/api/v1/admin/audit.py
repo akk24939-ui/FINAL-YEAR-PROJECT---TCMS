@@ -3,7 +3,7 @@ from typing import Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_admin
@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 @router.get("/audit", summary="View audit log (filterable)")
-def get_audit_log(
+async def get_audit_log(
     event_type: Optional[str] = Query(None),
     actor_id: Optional[str] = Query(None),
     date_from: Optional[datetime] = Query(None),
@@ -22,9 +22,9 @@ def get_audit_log(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    logs, total = admin_service.get_audit_logs(
+    logs, total = await admin_service.get_audit_logs(
         db,
         event_type=event_type,
         actor_id=actor_id,

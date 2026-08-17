@@ -9,7 +9,7 @@ import enum
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, DateTime, ForeignKey, func
+from sqlalchemy import String, DateTime, ForeignKey, func, Enum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
@@ -51,6 +51,12 @@ class AuditEventType(str, enum.Enum):
     ADMIN_DEACTIVATED_DOCTOR = "admin_deactivated_doctor"
     ADMIN_REVOKED_DOCTOR = "admin_revoked_doctor"
     DOCTOR_LOGIN_SUCCESS = "doctor_login_success"
+    # Doctor — clinical actions (identified access model)
+    DOCTOR_PATIENT_SEARCH    = "doctor_patient_search"    # query logged (masked)
+    DOCTOR_PATIENT_VIEWED    = "doctor_patient_viewed"    # detail access logged
+    DOCTOR_RESTRICTION_ISSUED    = "doctor_restriction_issued"
+    DOCTOR_RESTRICTION_CANCELLED = "doctor_restriction_cancelled"
+    DOCTOR_RESTRICTION_EXPIRED   = "doctor_restriction_expired"  # set by scheduler
     # Admin — global config
     ADMIN_UPDATED_GLOBAL_LIMITS = "admin_updated_global_limits"
     ADMIN_UPDATED_CONFIG = "admin_updated_config"
@@ -87,7 +93,14 @@ class AuditLog(Base):
     )
 
     event_type: Mapped[str] = mapped_column(
-        String(50), nullable=False, index=True
+        Enum(
+            AuditEventType,
+            native_enum=False,
+            create_type=False,
+            name="auditeventtype",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False, index=True
     )
 
     # Human-readable summary (no PII)

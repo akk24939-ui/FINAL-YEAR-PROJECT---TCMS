@@ -2,6 +2,7 @@ import React, { useCallback, useRef, useState } from 'react'
 import { Upload, FileImage, X, AlertTriangle, Loader2, PenLine } from 'lucide-react'
 import { consumerApi } from '../../../api/consumer.api'
 import type { OcrExtractResponse } from '../../../types/consumer.types'
+import { getErrorMessage } from '../../../utils/getErrorMessage'
 
 interface Props {
   onComplete: (data: OcrExtractResponse) => void
@@ -61,13 +62,7 @@ const StepA_Upload: React.FC<Props> = ({ onComplete, onSwitchToManual }) => {
       const result = await consumerApi.extractId(fd)
       onComplete(result.data)
     } catch (err: unknown) {
-      let msg = (err as any)?.response?.data?.detail
-      if (Array.isArray(msg)) {
-        msg = msg.map((m: any) => m.msg).join(', ')
-      } else if (typeof msg !== 'string') {
-        msg = null
-      }
-      setError(msg ?? 'Failed to extract data. Please try again with a clearer image.')
+      setError(getErrorMessage(err, 'Failed to extract data. Please try again with a clearer image.'))
     } finally {
       setLoading(false)
     }
@@ -104,8 +99,8 @@ const StepA_Upload: React.FC<Props> = ({ onComplete, onSwitchToManual }) => {
           dragActive
             ? 'border-[#F97316] bg-orange-500/10'
             : file
-            ? 'border-emerald-500/50 bg-emerald-500/5 cursor-default'
-            : 'border-gray-300 dark:border-white/20 bg-gray-50/50 dark:bg-white/5 hover:border-gray-400 dark:hover:border-white/40 hover:bg-gray-100 dark:bg-white/10',
+              ? 'border-emerald-500/50 bg-emerald-500/5 cursor-default'
+              : 'border-gray-300 dark:border-white/20 bg-gray-50/50 dark:bg-white/5 hover:border-gray-400 dark:hover:border-white/40 hover:bg-gray-100 dark:bg-white/10',
         ].join(' ')}
       >
         <input

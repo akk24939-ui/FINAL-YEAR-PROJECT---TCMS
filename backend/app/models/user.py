@@ -156,6 +156,16 @@ class User(Base):
         "CaretakerLink", back_populates="consumer",
         foreign_keys="CaretakerLink.consumer_id"
     )
+    # Doctor-issued restrictions (patient side)
+    doctor_restrictions_received: Mapped[list["DoctorRestriction"]] = relationship(
+        "DoctorRestriction", back_populates="patient",
+        foreign_keys="DoctorRestriction.patient_user_id",
+    )
+    # Doctor-issued restrictions (doctor side)
+    doctor_restrictions_issued: Mapped[list["DoctorRestriction"]] = relationship(
+        "DoctorRestriction", back_populates="doctor",
+        foreign_keys="DoctorRestriction.doctor_user_id",
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email} role={self.role}>"

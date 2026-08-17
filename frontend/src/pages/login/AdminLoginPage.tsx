@@ -1,169 +1,273 @@
 /**
- * AdminLoginPage — Government Administrator portal login.
+ * AdminLoginPage — Government Admin portal login.
  * Route: /login/admin
  *
- * Isolated from consumer and shop logins.
- * Posts to /api/v1/admin/auth/login (email + password).
- * Role mismatch → generic "Invalid credentials" from backend.
+ * Full light + dark mode support.
+ * Brand colour: Blue / Navy (Government).
+ * Separate from consumer and shop portals.
  */
 import React, { useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
 import { useNavigate, Link } from 'react-router-dom'
-import { Eye, EyeOff, Loader2, ShieldCheck, AlertCircle, Building2 } from 'lucide-react'
+import { Shield, Eye, EyeOff, Loader2, AlertCircle, KeyRound, Sun, Moon } from 'lucide-react'
 import { useAdminAuthStore } from '../../store/adminAuthStore'
 import { adminAuthApi } from '../../api/admin.api'
+import { useTheme } from '../../hooks/useTheme'
+import { getErrorMessage } from '../../utils/getErrorMessage'
 
-// ─── Schema ───────────────────────────────────────────────────────────────────
-const schema = z.object({
-  email: z.string().email('Enter a valid email address'),
-  password: z.string().min(1, 'Password is required'),
-})
-type FormValues = z.infer<typeof schema>
-
-// ─── Component ────────────────────────────────────────────────────────────────
 const AdminLoginPage: React.FC = () => {
   const navigate = useNavigate()
-  const { setAuth } = useAdminAuthStore()
-  const [showPwd, setShowPwd] = useState(false)
-  const [serverError, setServerError] = useState<string | null>(null)
+  const { theme, toggleTheme } = useTheme()
+  const setAuth = useAdminAuthStore(s => s.setAuth)
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<FormValues>({ resolver: zodResolver(schema) })
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPw, setShowPw] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
-  const onSubmit = async (values: FormValues) => {
-    setServerError(null)
+  // Forced change-password state
+  const [mustChange, setMustChange] = useState(false)
+  const [currentPw, setCurrentPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [showNew, setShowNew] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [changing, setChanging] = useState(false)
+  const [changeError, setChangeError] = useState('')
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
     try {
-      const resp = await adminAuthApi.login(values.email, values.password)
-      const data = resp.data
-      setAuth(data.admin, data.access_token, data.must_change_password ?? false)
-
-      if (data.must_change_password) {
-        navigate('/admin/change-password')
+      const res = await adminAuthApi.login(username, password)
+      const { access_token, admin, must_change_password } = res.data
+      setAuth(admin, access_token, must_change_password)
+      if (must_change_password) {
+        setMustChange(true)
       } else {
-        navigate('/admin')
+        navigate('/admin', { replace: true })
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setServerError(msg ?? 'Invalid credentials. Please try again.')
+      setError(getErrorMessage(err, 'Login failed. Check your credentials.'))
+    } finally {
+      setLoading(false)
     }
   }
 
-  const inputCls = (hasError: boolean) =>
-    [
-      'w-full bg-white/5 border rounded-xl px-4 py-3 text-white placeholder-white/30 text-sm outline-none transition-all',
-      hasError
-        ? 'border-red-500/60 focus:border-red-400'
-        : 'border-white/15 focus:border-blue-400 hover:border-white/30',
-    ].join(' ')
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setChangeError('')
+    if (newPw !== confirmPw) { setChangeError('Passwords do not match'); return }
+    if (newPw.length < 12) { setChangeError('New password must be at least 12 characters'); return }
+    setChanging(true)
+    try {
+      await adminAuthApi.changePassword(currentPw, newPw)
+      useAdminAuthStore.getState().clearMustChange()
+      navigate('/admin', { replace: true })
+    } catch (err: unknown) {
+      setChangeError(getErrorMessage(err, 'Password change failed.'))
+    } finally {
+      setChanging(false)
+    }
+  }
+
+  // Shared input style
+  const inputCls =
+    'w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 hover:border-gray-300 dark:hover:border-gray-600'
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4"
-      style={{ background: 'linear-gradient(135deg, #0A1628 0%, #0D2246 50%, #0A1628 100%)' }}>
+    /* Page wrapper */
+    <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-950 transition-colors duration-300">
 
-      <div className="w-full max-w-md">
-        {/* Branding */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
-            style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)' }}>
-            <Building2 className="w-8 h-8 text-blue-400" />
+      {/* ── Top bar ──────────────────────────────────────────────────────────── */}
+      <header className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-blue-700 flex items-center justify-center shadow-md shadow-blue-700/30">
+            <Shield className="w-4 h-4 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white">Government Admin Portal</h1>
-          <p className="text-white/50 text-sm mt-1">Tamil Nadu TASMAC Regulation System</p>
-          <div className="inline-flex items-center gap-1.5 mt-2 px-3 py-1 rounded-full text-xs font-semibold"
-            style={{ background: 'rgba(59,130,246,0.1)', color: 'rgba(147,197,253,0.9)', border: '1px solid rgba(59,130,246,0.2)' }}>
-            <ShieldCheck className="w-3 h-3" />
-            Restricted Access — Authorised Personnel Only
-          </div>
+          <span className="font-black text-gray-900 dark:text-white text-sm tracking-tight">
+            TASMAC <span className="text-blue-700 dark:text-blue-400">Admin</span>
+          </span>
         </div>
+        <div className="flex items-center gap-3">
+          <span className="hidden sm:inline text-xs text-gray-400 dark:text-gray-500 font-medium">Government Admin Portal</span>
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors"
+            aria-label="Toggle theme"
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+        </div>
+      </header>
 
-        {/* Card */}
-        <div className="rounded-2xl shadow-2xl p-8"
-          style={{ background: 'rgba(255,255,255,0.04)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.08)' }}>
+      {/* ── Main content ─────────────────────────────────────────────────────── */}
+      <main className="flex-1 flex items-center justify-center px-4 py-12">
+        <div className="w-full max-w-sm">
 
-          <h2 className="text-xl font-bold text-white mb-1">Administrator Sign In</h2>
-          <p className="text-sm text-white/40 mb-6">Use your government-issued admin credentials.</p>
-
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            {/* Email */}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-white/50 uppercase tracking-wide">
-                Admin Email
-              </label>
-              <input
-                type="email"
-                className={inputCls(!!errors.email)}
-                placeholder="admin@tn.gov.in"
-                autoComplete="username"
-                {...register('email')}
-              />
-              {errors.email && <p className="text-red-400 text-xs">{errors.email.message}</p>}
-            </div>
-
-            {/* Password */}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-white/50 uppercase tracking-wide">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  type={showPwd ? 'text' : 'password'}
-                  className={inputCls(!!errors.password)}
-                  placeholder="Your secure password"
-                  autoComplete="current-password"
-                  {...register('password')}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPwd(!showPwd)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70 transition-colors"
-                  aria-label="Toggle password visibility"
-                >
-                  {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
+          {/* Brand badge */}
+          <div className="text-center mb-8">
+            <div className="inline-flex flex-col items-center gap-3">
+              <div className="w-16 h-16 rounded-2xl bg-blue-700 shadow-lg shadow-blue-700/25 flex items-center justify-center">
+                <Shield className="w-8 h-8 text-white" />
               </div>
-              {errors.password && <p className="text-red-400 text-xs">{errors.password.message}</p>}
-            </div>
-
-            {/* Server error */}
-            {serverError && (
-              <div className="flex items-start gap-2 text-red-400 text-sm rounded-xl px-4 py-3"
-                style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
-                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                {serverError}
+              <div>
+                <h1 className="text-2xl font-black text-gray-900 dark:text-white tracking-tight">
+                  Government Admin
+                </h1>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Smart TASMAC Consumer Regulation System
+                </p>
               </div>
+            </div>
+          </div>
+
+          {/* Card */}
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl dark:shadow-gray-900/50 border border-gray-200 dark:border-gray-800 p-8">
+
+            {!mustChange ? (
+              /* ── Login form ─────────────────────────────────────────────── */
+              <>
+                <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-6">Sign In</h2>
+                <form onSubmit={handleLogin} className="space-y-4">
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest block">
+                      Admin Email
+                    </label>
+                    <input
+                      className={inputCls}
+                      type="email"
+                      placeholder="admin@tasmac.gov.in"
+                      value={username}
+                      onChange={e => setUsername(e.target.value)}
+                      required
+                      autoComplete="username"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest block">
+                      Password
+                    </label>
+                    <div className="relative">
+                      <input
+                        className={inputCls + ' pr-10'}
+                        type={showPw ? 'text' : 'password'}
+                        placeholder="Your password"
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        required
+                        autoComplete="current-password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPw(s => !s)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                      >
+                        {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {error && (
+                    <div className="flex items-center gap-2 text-red-600 dark:text-red-400 text-sm bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 px-3 py-2.5 rounded-xl">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" /> {error}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-3.5 rounded-xl bg-blue-700 hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-700/20 transition-all duration-200 mt-2"
+                  >
+                    {loading
+                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Signing in…</>
+                      : <><Shield className="w-4 h-4" /> Sign In</>
+                    }
+                  </button>
+
+                  <p className="text-center text-xs text-gray-400 dark:text-gray-600 pt-1">
+                    Restricted to authorised government administrators only.
+                  </p>
+                </form>
+              </>
+            ) : (
+              /* ── Forced password change ─────────────────────────────────── */
+              <>
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-500/20 flex items-center justify-center flex-shrink-0">
+                    <KeyRound className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white">Change Your Password</h2>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Required before accessing the dashboard</p>
+                  </div>
+                </div>
+
+                <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-xl px-4 py-3 mb-5">
+                  <p className="text-amber-700 dark:text-amber-300 text-xs leading-relaxed">
+                    Set a new password (minimum 12 characters) before continuing. This replaces the initial seed password.
+                  </p>
+                </div>
+
+                <form onSubmit={handleChangePassword} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest block">Current Password</label>
+                    <input className={inputCls} type="password" value={currentPw} onChange={e => setCurrentPw(e.target.value)} required />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest block">New Password (min 12 chars)</label>
+                    <div className="relative">
+                      <input className={inputCls + ' pr-10'} type={showNew ? 'text' : 'password'} value={newPw} onChange={e => setNewPw(e.target.value)} minLength={12} required />
+                      <button type="button" onClick={() => setShowNew(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+                        {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest block">Confirm New Password</label>
+                    <div className="relative">
+                      <input className={inputCls + ' pr-10'} type={showConfirm ? 'text' : 'password'} value={confirmPw} onChange={e => setConfirmPw(e.target.value)} required />
+                      <button type="button" onClick={() => setShowConfirm(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+                        {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                  {changeError && (
+                    <div className="flex items-center gap-2 text-red-600 dark:text-red-400 text-sm bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 px-3 py-2.5 rounded-xl">
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" /> {changeError}
+                    </div>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={changing}
+                    className="w-full py-3.5 rounded-xl bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-blue-700/20 transition-all mt-2"
+                  >
+                    {changing
+                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Updating…</>
+                      : 'Set New Password & Continue'
+                    }
+                  </button>
+                </form>
+              </>
             )}
+          </div>
 
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full py-3.5 rounded-xl font-bold text-sm text-white flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                background: isSubmitting ? '#374151' : 'linear-gradient(135deg, #1d4ed8, #3b82f6)',
-                boxShadow: isSubmitting ? 'none' : '0 4px 20px rgba(59,130,246,0.3)',
-              }}
-            >
-              {isSubmitting ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Signing in…</>
-              ) : (
-                <><ShieldCheck className="w-4 h-4" /> Admin Sign In</>
-              )}
-            </button>
-          </form>
+          {/* Portal links */}
+          <div className="mt-6 flex justify-center items-center gap-4 text-xs text-gray-400 dark:text-gray-600">
+            <Link to="/login" className="hover:text-gray-600 dark:hover:text-gray-400 transition-colors">Consumer Portal</Link>
+            <span className="w-1 h-1 rounded-full bg-gray-300 dark:bg-gray-700" />
+            <Link to="/login/shop" className="hover:text-gray-600 dark:hover:text-gray-400 transition-colors">Shop Portal</Link>
+          </div>
         </div>
+      </main>
 
-        {/* Portal links */}
-        <div className="mt-5 flex justify-center gap-4 text-xs text-white/25">
-          <Link to="/login" className="hover:text-white/50 transition-colors">Consumer Portal</Link>
-          <span>·</span>
-          <Link to="/login/shop" className="hover:text-white/50 transition-colors">Shop Portal</Link>
-        </div>
-      </div>
+      {/* Footer */}
+      <footer className="py-3 text-center text-[11px] text-gray-400 dark:text-gray-600 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900">
+        Government of Tamil Nadu · Smart TASMAC Consumer Regulation System
+      </footer>
     </div>
   )
 }

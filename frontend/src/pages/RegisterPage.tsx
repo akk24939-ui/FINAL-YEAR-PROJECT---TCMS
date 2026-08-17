@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { consumerApi } from '../api/consumer.api'
 import { useThemeStore } from '../store/themeStore'
 import { Users, ShoppingBag, BarChart3, Stethoscope, Shield, ChevronRight, AlertCircle, CheckCircle } from 'lucide-react'
+import { getErrorMessage } from '../utils/getErrorMessage'
 
 const step1Schema = z.object({
   full_name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -63,8 +64,7 @@ const RegisterPage: React.FC = () => {
       // Registration succeeded — redirect to login
       navigate('/login?registered=1')
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(msg || 'Registration failed. Please try again.')
+      setError(getErrorMessage(err, 'Registration failed. Please try again.'))
     } finally {
       setLoading(false)
     }

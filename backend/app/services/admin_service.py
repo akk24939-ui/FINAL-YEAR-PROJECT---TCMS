@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
 from app.models.audit_log import AuditLog, AuditEventType
@@ -36,7 +37,7 @@ GLOBAL_LIMIT_KEYS = {
 # ── Audit helper ──────────────────────────────────────────────────────────────
 
 def _audit(
-    db: Session,
+    db: AsyncSession,
     event_type: str,
     actor: User,
     target_user_id: Optional[uuid.UUID] = None,
@@ -69,27 +70,21 @@ PASSWORD_POLICY = (
 
 
 def _generate_temp_password() -> str:
-    """Generate a cryptographically secure 16-character temporary password.
-
-    Guaranteed to meet policy: upper + lower + digit + symbol.
-    Never stored in plaintext — caller must hash and discard immediately.
-    """
+    """Generate a cryptographically secure 16-character temporary password."""
     alphabet_lower = string.ascii_lowercase
     alphabet_upper = string.ascii_uppercase
     digits = string.digits
     symbols = '!@#$%&*'
     all_chars = alphabet_lower + alphabet_upper + digits + symbols
 
-    # Guarantee at least one of each required class
     password_chars = [
         secrets.choice(alphabet_upper),
         secrets.choice(alphabet_lower),
         secrets.choice(digits),
         secrets.choice(symbols),
     ]
-    password_chars += [secrets.choice(all_chars) for _ in range(12)]  # 16 total
+    password_chars += [secrets.choice(all_chars) for _ in range(12)]
 
-    # Shuffle to avoid predictable position of required chars
     shuffled = list(password_chars)
     for i in range(len(shuffled) - 1, 0, -1):
         j = secrets.randbelow(i + 1)
@@ -97,37 +92,66 @@ def _generate_temp_password() -> str:
     return ''.join(shuffled)
 
 
-def _generate_shop_code(district: str, db: Session) -> str:
+def _generate_mrn() -> str:
+    """Generate a mock Medical Registration Number: MRN-XXXXXXXX."""
+    return f"MRN-{secrets.randbelow(90_000_000) + 10_000_000:08d}"
+
+
+async def _generate_shop_code(district: str, db: AsyncSession) -> str:
     """Generate unique shop code TSM-{DISTRICT3}-{NNNNN}."""
     prefix = district[:3].upper()
     for _ in range(100):
         number = random.randint(1, 99999)
         code = f"TSM-{prefix}-{number:05d}"
-        if not db.query(Shop).filter(Shop.shop_code == code).first():
+        result = await db.execute(select(Shop).where(Shop.shop_code == code))
+        if not result.scalar_one_or_none():
             return code
     raise RuntimeError("Failed to generate unique shop code after 100 attempts")
 
 
 # ── Overview stats ─────────────────────────────────────────────────────────────
 
-def get_overview_stats(db: Session) -> dict:
+async def get_overview_stats(db: AsyncSession) -> dict:
     from app.models.purchase import Purchase
-    total_consumers = db.query(User).filter(User.role == UserRole.CONSUMER, User.is_active == True).count()
-    total_operators = db.query(User).filter(User.role == UserRole.OPERATOR, User.is_active == True).count()
-    total_doctors = db.query(User).filter(User.role == UserRole.DOCTOR).count()
-    total_shops = db.query(Shop).filter(Shop.is_active == True).count()
-    suspended_shops = db.query(Shop).filter(Shop.is_active == False).count()
+
+    r = await db.execute(
+        select(func.count()).select_from(User)
+        .where(User.role == UserRole.CONSUMER, User.is_active == True)  # noqa
+    )
+    total_consumers = r.scalar_one()
+
+    r = await db.execute(
+        select(func.count()).select_from(User)
+        .where(User.role == UserRole.OPERATOR, User.is_active == True)  # noqa
+    )
+    total_operators = r.scalar_one()
+
+    r = await db.execute(
+        select(func.count()).select_from(User).where(User.role == UserRole.DOCTOR)
+    )
+    total_doctors = r.scalar_one()
+
+    r = await db.execute(
+        select(func.count()).select_from(Shop).where(Shop.is_active == True)  # noqa
+    )
+    total_shops = r.scalar_one()
+
+    r = await db.execute(
+        select(func.count()).select_from(Shop).where(Shop.is_active == False)  # noqa
+    )
+    suspended_shops = r.scalar_one()
 
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_purchases = db.query(Purchase).filter(Purchase.purchased_at >= today_start).count()
-
-    # Recent audit events
-    recent_audit = (
-        db.query(AuditLog)
-        .order_by(AuditLog.created_at.desc())
-        .limit(10)
-        .all()
+    r = await db.execute(
+        select(func.count()).select_from(Purchase)
+        .where(Purchase.purchased_at >= today_start)
     )
+    today_purchases = r.scalar_one()
+
+    r = await db.execute(
+        select(AuditLog).order_by(AuditLog.created_at.desc()).limit(10)
+    )
+    recent_audit = r.scalars().all()
 
     return {
         "total_consumers": total_consumers,
@@ -142,7 +166,7 @@ def get_overview_stats(db: Session) -> dict:
 
 # ── Shop management ───────────────────────────────────────────────────────────
 
-def create_shop(
+async def create_shop(
     name: str,
     district: str,
     address: str,
@@ -151,20 +175,9 @@ def create_shop(
     operator_phone: str,
     initial_password: str,
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> tuple[Shop, User, str]:
-    """
-    Create shop + operator User account.
-
-    Args:
-        initial_password: Admin-set password for the operator. Stored hashed.
-                          must_change_password is set True so the operator is
-                          forced to change it on first login.
-
-    Returns (shop, operator_user, raw_pin) — PIN still used for quick POS login.
-    """
-    # Validate password policy
     import re
     if not re.match(PASSWORD_POLICY, initial_password):
         raise HTTPException(
@@ -172,31 +185,27 @@ def create_shop(
             detail="Password must be at least 8 characters with upper, lower, digit, and symbol.",
         )
 
-    # Generate PIN for POS quick-login
-    shop_code = _generate_shop_code(district, db)
+    shop_code = await _generate_shop_code(district, db)
     raw_pin = _generate_pin()
     pin_hash = hash_password(raw_pin)
 
-    # Synthetic email for operator (not used for login — login is shop_code + PIN)
     operator_email = f"op_{shop_code.lower().replace('-', '_')}@tasmac.internal"
 
-    # Create operator User
     operator_user = User(
         id=uuid.uuid4(),
         email=operator_email,
         full_name=operator_name,
-        password_hash=hash_password(initial_password),  # Admin-set, must change on first login
+        password_hash=hash_password(initial_password),
         pin_hash=pin_hash,
         role=UserRole.OPERATOR,
         is_active=True,
         is_verified=True,
-        must_change_password=True,   # Force password change on first login
+        must_change_password=True,
         last_pin_rotation=datetime.now(timezone.utc),
     )
     db.add(operator_user)
-    db.flush()  # get operator_user.id
+    await db.flush()
 
-    # Create Shop
     shop = Shop(
         id=uuid.uuid4(),
         shop_code=shop_code,
@@ -219,24 +228,25 @@ def create_shop(
         metadata={"shop_code": shop_code, "district": district, "must_change_password": True},
         ip_address=ip_address,
     )
-    db.commit()
-    db.refresh(shop)
-    db.refresh(operator_user)
+    await db.commit()
+    await db.refresh(shop)
+    await db.refresh(operator_user)
     return shop, operator_user, raw_pin
 
 
-def reset_shop_pin(
+async def reset_shop_pin(
     shop_id: uuid.UUID,
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> tuple[Shop, str]:
-    """Generate and store a new PIN. Returns (shop, plaintext_pin) — shown once."""
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    result = await db.execute(select(Shop).where(Shop.id == shop_id))
+    shop = result.scalar_one_or_none()
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
 
-    operator = db.query(User).filter(User.id == shop.operator_id).first()
+    op_result = await db.execute(select(User).where(User.id == shop.operator_id))
+    operator = op_result.scalar_one_or_none()
     if not operator:
         raise HTTPException(status_code=404, detail="Shop operator user not found")
 
@@ -254,47 +264,35 @@ def reset_shop_pin(
         metadata={"shop_code": shop.shop_code},
         ip_address=ip_address,
     )
-    db.commit()
-    db.refresh(shop)
+    await db.commit()
+    await db.refresh(shop)
     return shop, raw_pin
 
 
-def issue_temp_password(
+async def issue_temp_password(
     shop_id: uuid.UUID,
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> tuple[User, str]:
-    """Issue a temporary password for a shop operator (Feature 3).
-
-    Security contract:
-    - A cryptographically-secure 16-char password is generated.
-    - It is hashed with bcrypt before storing — plaintext is NEVER persisted.
-    - `must_change_password = True` is set — operator MUST change on next login.
-    - `otp_expires_at` is repurposed as temp_password_expires_at (24h window).
-    - The plaintext is returned ONCE to the caller and then discarded.
-    - This action is written to audit_logs (admin_id, operator_id, IP, timestamp).
-
-    Returns: (operator_user, plaintext_temp_password)
-    """
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    result = await db.execute(select(Shop).where(Shop.id == shop_id))
+    shop = result.scalar_one_or_none()
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
 
-    operator = db.query(User).filter(User.id == shop.operator_id).first()
+    op_result = await db.execute(select(User).where(User.id == shop.operator_id))
+    operator = op_result.scalar_one_or_none()
     if not operator:
         raise HTTPException(status_code=404, detail="Shop operator account not found")
 
     if not operator.is_active:
         raise HTTPException(status_code=400, detail="Operator account is deactivated")
 
-    # Generate temp password — plaintext only lives in this stack frame
     plaintext = _generate_temp_password()
     operator.password_hash = hash_password(plaintext)
     operator.must_change_password = True
     operator.failed_login_attempts = 0
     operator.locked_until = None
-    # Reuse otp_expires_at as a temp_password expiry (24-hour window)
     operator.otp_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
     _audit(
@@ -309,29 +307,19 @@ def issue_temp_password(
         metadata={"shop_code": shop.shop_code, "shop_id": str(shop_id)},
         ip_address=ip_address,
     )
-    db.commit()
-    db.refresh(operator)
-    # Return plaintext ONCE — never log, never store
+    await db.commit()
+    await db.refresh(operator)
     return operator, plaintext
 
 
-def change_operator_password(
+async def change_operator_password(
     shop_id: uuid.UUID,
     operator_user: User,
     current_password: str,
     new_password: str,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> None:
-    """Allow an operator to change their own password (Feature 2).
-
-    Requires:
-    - current_password matches stored hash
-    - new_password meets policy (min 8 chars, upper+lower+digit+symbol)
-    - new_password != current_password
-
-    Clears must_change_password flag on success.
-    """
     import re
     from app.core.security import verify_password
 
@@ -352,8 +340,8 @@ def change_operator_password(
 
     operator_user.password_hash = hash_password(new_password)
     operator_user.must_change_password = False
-    operator_user.otp_expires_at = None  # Clear temp password expiry
-    operator_user.token_version = (operator_user.token_version or 0) + 1  # Invalidate old tokens
+    operator_user.otp_expires_at = None
+    operator_user.token_version = (operator_user.token_version or 0) + 1
 
     _audit(
         db,
@@ -364,19 +352,18 @@ def change_operator_password(
         metadata={"shop_id": str(shop_id)},
         ip_address=ip_address,
     )
-    db.commit()
+    await db.commit()
 
 
-
-def suspend_shop(
+async def suspend_shop(
     shop_id: uuid.UUID,
     reason: str,
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> Shop:
-
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    result = await db.execute(select(Shop).where(Shop.id == shop_id))
+    shop = result.scalar_one_or_none()
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
     if not shop.is_active:
@@ -393,18 +380,19 @@ def suspend_shop(
         metadata={"shop_code": shop.shop_code, "reason": reason},
         ip_address=ip_address,
     )
-    db.commit()
-    db.refresh(shop)
+    await db.commit()
+    await db.refresh(shop)
     return shop
 
 
-def reactivate_shop(
+async def reactivate_shop(
     shop_id: uuid.UUID,
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> Shop:
-    shop = db.query(Shop).filter(Shop.id == shop_id).first()
+    result = await db.execute(select(Shop).where(Shop.id == shop_id))
+    shop = result.scalar_one_or_none()
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
     if shop.is_active:
@@ -421,56 +409,49 @@ def reactivate_shop(
         metadata={"shop_code": shop.shop_code},
         ip_address=ip_address,
     )
-    db.commit()
-    db.refresh(shop)
+    await db.commit()
+    await db.refresh(shop)
     return shop
 
 
-def list_shops(
-    db: Session,
+async def list_shops(
+    db: AsyncSession,
     district: Optional[str] = None,
     is_active: Optional[bool] = None,
     skip: int = 0,
     limit: int = 50,
 ) -> tuple[list[Shop], int]:
-    q = db.query(Shop)
+    stmt = select(Shop)
     if district:
-        q = q.filter(Shop.district.ilike(f"%{district}%"))
+        stmt = stmt.where(Shop.district.ilike(f"%{district}%"))
     if is_active is not None:
-        q = q.filter(Shop.is_active == is_active)
-    total = q.count()
-    shops = q.order_by(Shop.created_at.desc()).offset(skip).limit(limit).all()
-    return shops, total
+        stmt = stmt.where(Shop.is_active == is_active)
+
+    count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total = count_result.scalar_one()
+
+    items_result = await db.execute(
+        stmt.order_by(Shop.created_at.desc()).offset(skip).limit(limit)
+    )
+    shops = items_result.scalars().all()
+    return list(shops), total
 
 
 # ── Doctor management ─────────────────────────────────────────────────────────
 
-def _generate_temp_password() -> str:
-    """Generate a secure temporary password (16 chars, mixed)."""
-    chars = string.ascii_letters + string.digits + "!@#$"
-    return "".join(secrets.choice(chars) for _ in range(16))
-
-
-def _generate_mrn() -> str:
-    """Generate a mock Medical Registration Number: MRN-XXXXXXXX."""
-    return f"MRN-{secrets.randbelow(90_000_000) + 10_000_000:08d}"
-
-
-def create_doctor(
+async def create_doctor(
     full_name: str,
     specialization: Optional[str],
     contact_phone: Optional[str],
     hospital_name: Optional[str],
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
+    initial_password: Optional[str] = None,
 ) -> tuple[User, DoctorProfile, str]:
-    """
-    Create doctor User + DoctorProfile.
-    Returns (user, profile, plaintext_temp_password) — shown once.
-    """
     mrn = _generate_mrn()
-    temp_password = _generate_temp_password()
+    temp_password = initial_password if (initial_password and len(initial_password) >= 6) else _generate_temp_password()
+    must_change = not (initial_password and len(initial_password) >= 6)
     doctor_email = f"dr_{mrn.lower().replace('-', '_')}@tasmac.internal"
 
     doctor_user = User(
@@ -481,10 +462,10 @@ def create_doctor(
         role=UserRole.DOCTOR,
         is_active=True,
         is_verified=True,
-        must_change_password=True,
+        must_change_password=must_change,
     )
     db.add(doctor_user)
-    db.flush()
+    await db.flush()
 
     doctor_profile = DoctorProfile(
         id=uuid.uuid4(),
@@ -493,7 +474,7 @@ def create_doctor(
         specialization=specialization,
         contact_phone=contact_phone,
         hospital_name=hospital_name,
-        is_active=False,  # Must be explicitly activated by admin
+        is_active=False,
     )
     db.add(doctor_profile)
 
@@ -504,23 +485,26 @@ def create_doctor(
         metadata={"mrn": mrn, "specialization": specialization},
         ip_address=ip_address,
     )
-    db.commit()
-    db.refresh(doctor_user)
-    db.refresh(doctor_profile)
+    await db.commit()
+    await db.refresh(doctor_user)
+    await db.refresh(doctor_profile)
     return doctor_user, doctor_profile, temp_password
 
 
-def activate_doctor(
+async def activate_doctor(
     doctor_user_id: uuid.UUID,
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> DoctorProfile:
-    profile = db.query(DoctorProfile).filter(DoctorProfile.user_id == doctor_user_id).first()
+    result = await db.execute(
+        select(DoctorProfile).where(DoctorProfile.user_id == doctor_user_id)
+    )
+    profile = result.scalar_one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Doctor profile not found")
     if profile.is_active:
-        raise HTTPException(status_code=400, detail="Doctor is already active")
+        return profile
 
     profile.is_active = True
     profile.activated_by = admin.id
@@ -534,24 +518,28 @@ def activate_doctor(
         metadata={"mrn": profile.medical_reg_number},
         ip_address=ip_address,
     )
-    db.commit()
-    db.refresh(profile)
+    await db.commit()
+    await db.refresh(profile)
     return profile
 
 
-def deactivate_doctor(
+async def deactivate_doctor(
     doctor_user_id: uuid.UUID,
     reason: str,
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
     revoke_tokens: bool = True,
 ) -> DoctorProfile:
-    profile = db.query(DoctorProfile).filter(DoctorProfile.user_id == doctor_user_id).first()
+    result = await db.execute(
+        select(DoctorProfile).where(DoctorProfile.user_id == doctor_user_id)
+    )
+    profile = result.scalar_one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Doctor profile not found")
 
-    doctor_user = db.query(User).filter(User.id == doctor_user_id).first()
+    user_result = await db.execute(select(User).where(User.id == doctor_user_id))
+    doctor_user = user_result.scalar_one_or_none()
     if not doctor_user:
         raise HTTPException(status_code=404, detail="Doctor user not found")
 
@@ -560,7 +548,6 @@ def deactivate_doctor(
     profile.deactivation_reason = reason
 
     if revoke_tokens:
-        # Increment token_version to immediately invalidate all existing JWTs
         doctor_user.token_version = (doctor_user.token_version or 0) + 1
 
     event = AuditEventType.ADMIN_REVOKED_DOCTOR if revoke_tokens else AuditEventType.ADMIN_DEACTIVATED_DOCTOR
@@ -571,72 +558,121 @@ def deactivate_doctor(
         metadata={"mrn": profile.medical_reg_number, "tokens_revoked": revoke_tokens},
         ip_address=ip_address,
     )
-    db.commit()
-    db.refresh(profile)
+    await db.commit()
+    await db.refresh(profile)
     return profile
 
 
-def list_doctors(
-    db: Session,
+async def list_doctors(
+    db: AsyncSession,
     is_active: Optional[bool] = None,
     skip: int = 0,
     limit: int = 50,
 ) -> tuple[list[tuple[User, DoctorProfile]], int]:
-    q = (
-        db.query(User, DoctorProfile)
+    stmt = (
+        select(User, DoctorProfile)
         .join(DoctorProfile, DoctorProfile.user_id == User.id)
-        .filter(User.role == UserRole.DOCTOR)
+        .where(User.role == UserRole.DOCTOR)
     )
     if is_active is not None:
-        q = q.filter(DoctorProfile.is_active == is_active)
-    total = q.count()
-    results = q.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
-    return results, total
+        stmt = stmt.where(DoctorProfile.is_active == is_active)
+
+    count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total = count_result.scalar_one()
+
+    items_result = await db.execute(
+        stmt.order_by(User.created_at.desc()).offset(skip).limit(limit)
+    )
+    results = items_result.all()
+    return [(row[0], row[1]) for row in results], total
 
 
 # ── Consumer management (read-only for admin) ─────────────────────────────────
 
-def list_consumers(
-    db: Session,
+async def list_consumers(
+    db: AsyncSession,
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-) -> tuple[list[User], int]:
-    q = db.query(User).filter(User.role == UserRole.CONSUMER)
+) -> tuple[list[tuple], int]:
+    """Return (User, ConsumerProfile | None) tuples — eagerly joined to avoid lazy-load
+    errors with AsyncSession."""
+    from app.models.consumer_profile import ConsumerProfile
+    from sqlalchemy import or_
+
+    stmt = (
+        select(User, ConsumerProfile)
+        .outerjoin(ConsumerProfile, ConsumerProfile.user_id == User.id)
+        .where(User.role == UserRole.CONSUMER)
+    )
     if search:
-        q = q.filter(User.full_name.ilike(f"%{search}%"))
-    total = q.count()
-    users = q.order_by(User.created_at.desc()).offset(skip).limit(limit).all()
-    return users, total
+        pattern = f"%{search.strip()}%"
+        stmt = stmt.where(
+            or_(
+                User.full_name.ilike(pattern),
+                User.mobile_number.ilike(pattern),
+            )
+        )
+
+    count_stmt = select(func.count()).select_from(
+        select(User.id)
+        .outerjoin(ConsumerProfile, ConsumerProfile.user_id == User.id)
+        .where(User.role == UserRole.CONSUMER)
+        .subquery()
+    )
+    if search:
+        pattern = f"%{search.strip()}%"
+        count_stmt = select(func.count()).select_from(
+            select(User.id)
+            .outerjoin(ConsumerProfile, ConsumerProfile.user_id == User.id)
+            .where(User.role == UserRole.CONSUMER)
+            .where(
+                or_(
+                    User.full_name.ilike(pattern),
+                    User.mobile_number.ilike(pattern),
+                )
+            )
+            .subquery()
+        )
+
+    count_result = await db.execute(count_stmt)
+    total = count_result.scalar_one_or_none() or 0
+
+    items_result = await db.execute(
+        stmt.order_by(User.created_at.desc()).offset(skip).limit(limit)
+    )
+    rows = items_result.all()  # list of (User, ConsumerProfile | None)
+    return list(rows), total
 
 
 # ── Global limits (system_config) ─────────────────────────────────────────────
 
-def get_global_limits(db: Session) -> dict:
-    configs = db.query(SystemConfig).filter(
-        SystemConfig.key.in_(list(GLOBAL_LIMIT_KEYS.keys()))
-    ).all()
-    result = {k: v for k, (_, v) in GLOBAL_LIMIT_KEYS.items()}  # defaults
+async def get_global_limits(db: AsyncSession) -> dict:
+    result = await db.execute(
+        select(SystemConfig).where(SystemConfig.key.in_(list(GLOBAL_LIMIT_KEYS.keys())))
+    )
+    configs = result.scalars().all()
+    out = {k: v for k, (_, v) in GLOBAL_LIMIT_KEYS.items()}  # defaults
     for cfg in configs:
         try:
-            result[cfg.key] = float(cfg.value)
+            out[cfg.key] = float(cfg.value)
         except (ValueError, TypeError):
             pass
-    return result
+    return out
 
 
-def update_global_limits(
+async def update_global_limits(
     daily_limit_sd: float,
     weekly_limit_sd: float,
     monthly_limit_sd: float,
     admin: User,
-    db: Session,
+    db: AsyncSession,
     ip_address: str = "unknown",
 ) -> dict:
     if daily_limit_sd < 0 or weekly_limit_sd < 0 or monthly_limit_sd < 0:
         raise HTTPException(status_code=422, detail="Limits cannot be negative")
 
-    old_limits = get_global_limits(db)
+    old_limits = await get_global_limits(db)
 
     updates = {
         "global_daily_limit_sd": daily_limit_sd,
@@ -645,7 +681,8 @@ def update_global_limits(
     }
 
     for key, value in updates.items():
-        cfg = db.query(SystemConfig).filter(SystemConfig.key == key).first()
+        cfg_result = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
+        cfg = cfg_result.scalar_one_or_none()
         if cfg:
             cfg.value = str(value)
             cfg.updated_by = admin.id
@@ -664,20 +701,22 @@ def update_global_limits(
         description="Updated global alcohol limits",
         metadata={
             "old": old_limits,
-            "new": {"global_daily_limit_sd": daily_limit_sd,
-                    "global_weekly_limit_sd": weekly_limit_sd,
-                    "global_monthly_limit_sd": monthly_limit_sd},
+            "new": {
+                "global_daily_limit_sd": daily_limit_sd,
+                "global_weekly_limit_sd": weekly_limit_sd,
+                "global_monthly_limit_sd": monthly_limit_sd,
+            },
         },
         ip_address=ip_address,
     )
-    db.commit()
-    return get_global_limits(db)
+    await db.commit()
+    return await get_global_limits(db)
 
 
 # ── Audit log viewer ──────────────────────────────────────────────────────────
 
-def get_audit_logs(
-    db: Session,
+async def get_audit_logs(
+    db: AsyncSession,
     event_type: Optional[str] = None,
     actor_id: Optional[str] = None,
     date_from: Optional[datetime] = None,
@@ -685,18 +724,24 @@ def get_audit_logs(
     skip: int = 0,
     limit: int = 50,
 ) -> tuple[list[AuditLog], int]:
-    q = db.query(AuditLog)
+    stmt = select(AuditLog)
     if event_type:
-        q = q.filter(AuditLog.event_type == event_type)
+        stmt = stmt.where(AuditLog.event_type == event_type)
     if actor_id:
         try:
-            q = q.filter(AuditLog.actor_id == uuid.UUID(actor_id))
+            stmt = stmt.where(AuditLog.actor_id == uuid.UUID(actor_id))
         except ValueError:
             pass
     if date_from:
-        q = q.filter(AuditLog.created_at >= date_from)
+        stmt = stmt.where(AuditLog.created_at >= date_from)
     if date_to:
-        q = q.filter(AuditLog.created_at <= date_to)
-    total = q.count()
-    logs = q.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit).all()
-    return logs, total
+        stmt = stmt.where(AuditLog.created_at <= date_to)
+
+    count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total = count_result.scalar_one()
+
+    items_result = await db.execute(
+        stmt.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit)
+    )
+    logs = items_result.scalars().all()
+    return list(logs), total

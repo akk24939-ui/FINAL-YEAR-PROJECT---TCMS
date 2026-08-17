@@ -27,10 +27,23 @@ let _opRefreshing = false
 let _opWaiters: Array<(token: string) => void> = []
 let _opFailWaiters: Array<(err: unknown) => void> = []
 
+const OPERATOR_AUTH_BYPASS = [
+  '/api/v1/shop/auth/login',
+  '/api/v1/shop/auth/refresh',
+  '/api/v1/shop/auth/logout',
+  '/api/v1/shop/auth/change-password',
+]
+const isOperatorAuthUrl = (url?: string) =>
+  OPERATOR_AUTH_BYPASS.some((b) => url?.includes(b))
+
 operatorClient.interceptors.response.use(
   (r) => r,
   async (err) => {
     const original = err.config
+
+    // Never intercept auth endpoints
+    if (isOperatorAuthUrl(original?.url)) return Promise.reject(err)
+
     if (err.response?.status === 401 && !original._retry) {
       original._retry = true
       if (_opRefreshing) {

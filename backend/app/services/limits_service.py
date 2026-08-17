@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditEventType, AuditLog
 from app.models.consumer_limits import ConsumerLimits
@@ -24,8 +25,8 @@ from app.schemas.dashboard import ConsumerLimitsResponse, ConsumerLimitsUpdateRe
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _write_audit(
-    db: Session,
+async def _write_audit(
+    db: AsyncSession,
     event_type: AuditEventType,
     *,
     user_id,
@@ -39,15 +40,16 @@ def _write_audit(
             description=description,
             metadata_json=metadata_json,
         ))
-        db.flush()
+        await db.flush()
     except Exception:
         pass
 
 
-def _fetch_profile(user: User, db: Session) -> ConsumerProfile:
-    profile = db.query(ConsumerProfile).filter(
-        ConsumerProfile.user_id == user.id
-    ).first()
+async def _fetch_profile(user: User, db: AsyncSession) -> ConsumerProfile:
+    result = await db.execute(
+        select(ConsumerProfile).where(ConsumerProfile.user_id == user.id)
+    )
+    profile = result.scalar_one_or_none()
     if not profile:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -56,11 +58,12 @@ def _fetch_profile(user: User, db: Session) -> ConsumerProfile:
     return profile
 
 
-def _get_or_create_limits(consumer_id: uuid.UUID, db: Session) -> ConsumerLimits:
+async def _get_or_create_limits(consumer_id: uuid.UUID, db: AsyncSession) -> ConsumerLimits:
     """Fetch limits record, creating a default one if it doesn't exist yet."""
-    limits = db.query(ConsumerLimits).filter(
-        ConsumerLimits.consumer_id == consumer_id
-    ).first()
+    result = await db.execute(
+        select(ConsumerLimits).where(ConsumerLimits.consumer_id == consumer_id)
+    )
+    limits = result.scalar_one_or_none()
     if limits is None:
         limits = ConsumerLimits(
             consumer_id=consumer_id,
@@ -70,15 +73,16 @@ def _get_or_create_limits(consumer_id: uuid.UUID, db: Session) -> ConsumerLimits
             beverage_preference=[],
         )
         db.add(limits)
-        db.flush()
+        await db.flush()
     return limits
 
 
-def _is_locked(user: User, db: Session) -> tuple[bool, Optional[datetime]]:
+async def _is_locked(user: User, db: AsyncSession) -> tuple[bool, Optional[datetime]]:
     """Check if the consumer has an active self-restriction lock."""
-    restriction = db.query(SelfRestriction).filter(
-        SelfRestriction.user_id == user.id
-    ).first()
+    result = await db.execute(
+        select(SelfRestriction).where(SelfRestriction.user_id == user.id)
+    )
+    restriction = result.scalar_one_or_none()
     if restriction and restriction.is_locked:
         now = datetime.now(timezone.utc)
         if restriction.locked_until is None or restriction.locked_until > now:
@@ -116,24 +120,24 @@ def _build_response(
 
 # ── Public functions ──────────────────────────────────────────────────────────
 
-def get_limits(user: User, db: Session) -> ConsumerLimitsResponse:
+async def get_limits(user: User, db: AsyncSession) -> ConsumerLimitsResponse:
     """Return current limits for the authenticated consumer."""
-    profile = _fetch_profile(user, db)
-    limits = _get_or_create_limits(profile.id, db)
-    db.commit()
-    locked, locked_until = _is_locked(user, db)
+    profile = await _fetch_profile(user, db)
+    limits = await _get_or_create_limits(profile.id, db)
+    await db.commit()
+    locked, locked_until = await _is_locked(user, db)
     return _build_response(limits, locked, locked_until)
 
 
-def update_limits(
-    user: User, data: ConsumerLimitsUpdateRequest, db: Session
+async def update_limits(
+    user: User, data: ConsumerLimitsUpdateRequest, db: AsyncSession
 ) -> ConsumerLimitsResponse:
     """Save new limits.
 
     Blocked if a self-restriction lock is active.
     Writes audit_log with old + new values.
     """
-    locked, locked_until = _is_locked(user, db)
+    locked, locked_until = await _is_locked(user, db)
     if locked:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -141,8 +145,8 @@ def update_limits(
                    "Lift the restriction first.",
         )
 
-    profile = _fetch_profile(user, db)
-    limits = _get_or_create_limits(profile.id, db)
+    profile = await _fetch_profile(user, db)
+    limits = await _get_or_create_limits(profile.id, db)
 
     # Capture old values for audit
     old_values = {
@@ -158,7 +162,7 @@ def update_limits(
     limits.monthly_limit_sd = data.monthly_limit_sd
     limits.beverage_preference = data.beverage_preference
 
-    _write_audit(
+    await _write_audit(
         db,
         AuditEventType.LIMIT_CHANGED,
         user_id=user.id,
@@ -173,7 +177,7 @@ def update_limits(
             },
         },
     )
-    db.commit()
-    db.refresh(limits)
+    await db.commit()
+    await db.refresh(limits)
 
     return _build_response(limits, locked=False, locked_until=None)

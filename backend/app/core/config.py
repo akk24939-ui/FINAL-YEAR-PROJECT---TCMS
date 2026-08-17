@@ -1,29 +1,45 @@
-"""Application settings loaded from .env via pydantic-settings."""
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
-    SECRET_KEY: str
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
-    BCRYPT_ROUNDS: int = 12
-    FERNET_KEY: str  # base64 url-safe 32-byte key
-    OTP_TTL_SECONDS: int = 300   # 5 minutes
-    OTP_MAX_ATTEMPTS: int = 5
-    QR_TTL_SECONDS: int = 1800   # 30 minutes
-    ALLOWED_ORIGIN: str = "http://localhost:5173"
-    UPLOAD_DIR: str = "uploads/photos"
-    MAX_UPLOAD_SIZE_MB: int = 5
-    COOLING_OFF_HOURS: int = 24
-    ENVIRONMENT: str = "development"
-    # Admin bootstrap — read by scripts/seed_admin.py only, ignored by app
-    ADMIN_SEED_USERNAME: str = "admin@tasmac.gov.in"
-    ADMIN_SEED_PASSWORD: str = "271527"
+    # Database
+    database_url: str
 
-    class Config:
-        env_file = ".env"
+    # JWT
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 15
+    refresh_token_expire_days: int = 7
+
+    # Encryption
+    field_encryption_key: str
+    qr_hmac_secret: str
+
+    # App
+    frontend_origin: str = "http://localhost:5173"
+    environment: str = "development"
+    debug: bool = False
+    max_upload_size_mb: int = 5  # max file upload size in MB
+
+    # Rate limits
+    rate_limit_auth: str = "10/minute"
+    rate_limit_purchase: str = "30/minute"
+    rate_limit_export: str = "1/30seconds"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
-settings = Settings()
+
+@lru_cache()
+def get_settings() -> Settings:
+    return Settings()  # type: ignore[call-arg]
+
+
+# Module-level singleton — allows `from app.core.config import settings`
+# (used by several service modules that were written before the lru_cache pattern)
+settings: Settings = get_settings()

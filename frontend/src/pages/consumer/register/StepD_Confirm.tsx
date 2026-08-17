@@ -1,8 +1,9 @@
 import React, { useState } from 'react'
-import { ChevronLeft, CheckCircle, Loader2, AlertCircle, LogIn } from 'lucide-react'
+import { ChevronLeft, CheckCircle, Loader2, AlertCircle, LogIn, HelpCircle, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { consumerApi } from '../../../api/consumer.api'
 import type { RegisterFinalRequest } from '../../../types/consumer.types'
+import { getErrorMessage } from '../../../utils/getErrorMessage'
 
 interface Props {
   formData: RegisterFinalRequest
@@ -34,13 +35,7 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
       setSuccess(true)
       onSuccess()
     } catch (err: unknown) {
-      let msg = (err as any)?.response?.data?.detail
-      if (Array.isArray(msg)) {
-        msg = msg.map((m: any) => m.msg).join(', ')
-      } else if (typeof msg !== 'string') {
-        msg = null
-      }
-      setError(msg ?? 'Registration failed. Please try again.')
+      setError(getErrorMessage(err, 'Registration failed. Please try again.'))
     } finally {
       setLoading(false)
     }
@@ -81,7 +76,7 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
       {/* Summary */}
       <div className="bg-gray-50/50 dark:bg-white/5 rounded-xl px-4 divide-y divide-white/10">
         <Row label="Full Name" value={formData.full_name} />
-        <Row label="Email" value={formData.email} />
+        {formData.email && <Row label="Email" value={formData.email} />}
         <Row label="Mobile" value={formData.mobile_number} />
         <Row label="Date of Birth" value={formData.dob} />
         <Row label="Gender" value={formData.gender} />
@@ -106,11 +101,40 @@ const StepD_Confirm: React.FC<Props> = ({ formData, onSuccess, onBack }) => {
         </span>
       </label>
 
-      {/* Error */}
+      {/* Error panel — shows specific reason from backend */}
       {error && (
-        <div className="flex items-start gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
-          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-          <span>{error}</span>
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 overflow-hidden">
+          {/* Header bar */}
+          <div className="flex items-center justify-between px-4 py-2.5 bg-red-500/20 border-b border-red-500/20">
+            <div className="flex items-center gap-2 text-red-400">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span className="text-sm font-bold">Registration Failed</span>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              className="text-red-400/60 hover:text-red-400 transition-colors"
+              aria-label="Dismiss error"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Reason + help */}
+          <div className="px-4 py-3 space-y-2">
+            <p className="text-sm text-red-300 leading-snug">{error}</p>
+            <div className="flex items-start gap-1.5 text-red-400/70">
+              <HelpCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+              <span className="text-xs leading-snug">
+                {error.toLowerCase().includes('email')
+                  ? 'Try signing in instead, or use a different email address.'
+                  : error.toLowerCase().includes('mobile')
+                    ? 'Use a different mobile number, or contact support if this is your number.'
+                    : error.toLowerCase().includes('aadhaar')
+                      ? 'Each Aadhaar card can only be linked to one account. Contact support if you believe this is an error.'
+                      : 'Please check your details and try again. If the problem persists, contact support.'}
+              </span>
+            </div>
+          </div>
         </div>
       )}
 

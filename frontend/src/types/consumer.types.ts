@@ -37,13 +37,13 @@ export interface OcrExtractResponse {
 }
 
 export interface RegisterFinalRequest {
-  email: string
+  email?: string           // Optional — Aadhaar is the primary identifier
   mobile_number: string
   password: string
   full_name: string
   dob: string
   gender: Gender
-  aadhaar_number: string
+  aadhaar_number: string  // PRIMARY unique identifier
   district: string
   address?: string
 }

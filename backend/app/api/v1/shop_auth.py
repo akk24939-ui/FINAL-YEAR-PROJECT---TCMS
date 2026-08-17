@@ -9,16 +9,16 @@ Feature 3: Enforces temp_password expiry (otp_expires_at) on login.
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, get_client_ip
 from app.core.security import clear_refresh_cookie, set_refresh_cookie
 from app.models.user import User, UserRole
 from app.services import admin_service, shop_auth_service
-from fastapi import HTTPException
 
 router = APIRouter(prefix="/shop/auth", tags=["Shop Auth"])
 
@@ -39,10 +39,10 @@ class ChangePasswordRequest(BaseModel):
 
 
 @router.post("/login", summary="Shop operator login (shop_code + PIN)")
-def shop_login(
+async def shop_login(
     body: ShopLoginRequest,
     response: Response,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     ip: str = Depends(get_client_ip),
 ):
     """Authenticate operator by shop_code + PIN.
@@ -53,7 +53,7 @@ def shop_login(
 
     Also checks that temp password has not expired (24-hour window).
     """
-    result = shop_auth_service.shop_login(
+    result = await shop_auth_service.shop_login(
         shop_code=body.shop_code,
         pin=body.pin,
         db=db,
@@ -84,10 +84,10 @@ def shop_login(
 
 
 @router.post("/change-password", summary="Operator changes their own password (Feature 2)")
-def change_password(
+async def change_password(
     body: ChangePasswordRequest,
     response: Response,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     ip: str = Depends(get_client_ip),
     current_user: User = Depends(get_current_user),
 ):
@@ -107,10 +107,11 @@ def change_password(
 
     # Find operator's shop to pass shop_id for audit log
     from app.models.shop import Shop
-    shop = db.query(Shop).filter(Shop.operator_id == current_user.id).first()
+    result = await db.execute(select(Shop).where(Shop.operator_id == current_user.id))
+    shop = result.scalar_one_or_none()
     shop_id = shop.id if shop else current_user.id  # fallback
 
-    admin_service.change_operator_password(
+    await admin_service.change_operator_password(
         shop_id=shop_id,
         operator_user=current_user,
         current_password=body.current_password,
@@ -129,6 +130,6 @@ def change_password(
 
 
 @router.post("/logout", summary="Shop operator logout")
-def shop_logout(response: Response):
+async def shop_logout(response: Response):
     clear_refresh_cookie(response)
     return {"message": "Logged out"}

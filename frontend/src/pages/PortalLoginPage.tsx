@@ -18,6 +18,7 @@ import { useTheme } from '../context/ThemeContext'
 import type { AdminUser } from '../types/admin.types'
 import type { ShopInfo } from '../types/operator.types'
 import axios from 'axios'
+import { getErrorMessage } from '../utils/getErrorMessage'
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -39,12 +40,12 @@ const PortalLoginPage: React.FC = () => {
   const { theme, toggleTheme } = useTheme()
   const [searchParams] = useSearchParams()
 
-  const setAdminAuth    = useAdminAuthStore((s: { setAuth: (admin: AdminUser, token: string, mustChange: boolean) => void }) => s.setAuth)
+  const setAdminAuth = useAdminAuthStore((s: { setAuth: (admin: AdminUser, token: string, mustChange: boolean) => void }) => s.setAuth)
   const setOperatorAuth = useOperatorAuthStore((s: { setAuth: (token: string, shop: ShopInfo, pinWarning: string | null) => void }) => s.setAuth)
 
-  const [tab, setTab]         = useState<Tab>('admin')
+  const [tab, setTab] = useState<Tab>('admin')
   const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState('')
+  const [error, setError] = useState('')
 
   // Auto-select tab from URL ?tab=operator
   useEffect(() => {
@@ -52,14 +53,14 @@ const PortalLoginPage: React.FC = () => {
   }, [searchParams])
 
   // Admin fields
-  const [email, setEmail]       = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [showPwd, setShowPwd]   = useState(false)
+  const [showPwd, setShowPwd] = useState(false)
 
   // Operator fields
   const [shopCode, setShopCode] = useState('')
-  const [pin, setPin]           = useState(['', '', '', '', '', ''])
-  const [showPin, setShowPin]   = useState(false)
+  const [pin, setPin] = useState(['', '', '', '', '', ''])
+  const [showPin, setShowPin] = useState(false)
   const pinRefs = useRef<(HTMLInputElement | null)[]>([])
 
   // ── PIN handlers ──────────────────────────────────────────────────────────
@@ -94,8 +95,7 @@ const PortalLoginPage: React.FC = () => {
         navigate('/admin', { replace: true })
       }
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(detail || 'Invalid credentials. Check your email and password.')
+      setError(getErrorMessage(err, 'Invalid credentials. Check your email and password.'))
     } finally { setLoading(false) }
   }
 
@@ -113,8 +113,7 @@ const PortalLoginPage: React.FC = () => {
       setOperatorAuth(access_token, shop, pin_rotation_warning ?? null)
       navigate('/shop', { replace: true })
     } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(detail || 'Invalid shop code or PIN.')
+      setError(getErrorMessage(err, 'Invalid shop code or PIN.'))
       setPin(['', '', '', '', '', ''])
       pinRefs.current[0]?.focus()
     } finally { setLoading(false) }

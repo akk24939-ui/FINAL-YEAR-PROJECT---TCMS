@@ -9,7 +9,8 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import (
     Notification,
@@ -19,18 +20,15 @@ from app.models.notification import (
 from app.models.user import User
 
 
-def create_notification(
+async def create_notification(
     user_id: UUID,
     title: str,
     message: str,
     ntype: NotificationType,
     category: NotificationCategory,
-    db: Session,
+    db: AsyncSession,
 ) -> Notification:
-    """Create and persist a new notification for *user_id*.
-
-    Returns the created Notification object.
-    """
+    """Create and persist a new notification for *user_id*."""
     notification = Notification(
         user_id=user_id,
         title=title,
@@ -39,56 +37,51 @@ def create_notification(
         category=category,
     )
     db.add(notification)
-    db.commit()
-    db.refresh(notification)
+    await db.commit()
+    await db.refresh(notification)
     return notification
 
 
-def get_unread(user: User, db: Session) -> list[Notification]:
+async def get_unread(user: User, db: AsyncSession) -> list[Notification]:
     """Return all unread notifications for *user* (newest first)."""
-    return (
-        db.query(Notification)
-        .filter(
+    result = await db.execute(
+        select(Notification)
+        .where(
             Notification.user_id == user.id,
             Notification.is_read == False,  # noqa: E712
         )
         .order_by(Notification.created_at.desc())
-        .all()
     )
+    return result.scalars().all()
 
 
-def get_all(
+async def get_all(
     user: User,
-    db: Session,
+    db: AsyncSession,
     skip: int = 0,
     limit: int = 50,
 ) -> list[Notification]:
     """Return paginated notifications for *user* (newest first)."""
-    return (
-        db.query(Notification)
-        .filter(Notification.user_id == user.id)
+    result = await db.execute(
+        select(Notification)
+        .where(Notification.user_id == user.id)
         .order_by(Notification.created_at.desc())
         .offset(skip)
         .limit(limit)
-        .all()
     )
+    return result.scalars().all()
 
 
-def mark_read(
+async def mark_read(
     user: User,
     notification_id: UUID,
-    db: Session,
+    db: AsyncSession,
 ) -> Notification:
-    """Mark a single notification as read.
-
-    Raises 404 if not found; raises 403 if the notification belongs to a
-    different user (IDOR protection).
-    """
-    notification: Optional[Notification] = (
-        db.query(Notification)
-        .filter(Notification.id == notification_id)
-        .first()
+    """Mark a single notification as read. IDOR-safe."""
+    result = await db.execute(
+        select(Notification).where(Notification.id == notification_id)
     )
+    notification: Optional[Notification] = result.scalar_one_or_none()
     if notification is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -102,18 +95,18 @@ def mark_read(
         )
     notification.is_read = True
     notification.read_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(notification)
+    await db.commit()
+    await db.refresh(notification)
     return notification
 
 
-def get_unread_count(user: User, db: Session) -> int:
+async def get_unread_count(user: User, db: AsyncSession) -> int:
     """Return the count of unread notifications for *user*."""
-    return (
-        db.query(Notification)
-        .filter(
+    result = await db.execute(
+        select(Notification)
+        .where(
             Notification.user_id == user.id,
             Notification.is_read == False,  # noqa: E712
         )
-        .count()
     )
+    return len(result.scalars().all())

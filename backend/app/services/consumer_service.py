@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import decrypt_aadhaar, mask_aadhaar
@@ -30,8 +31,8 @@ from app.services.image_service import strip_exif_and_reencode
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
-def _write_audit(
-    db: Session,
+async def _write_audit(
+    db: AsyncSession,
     event_type: AuditEventType,
     *,
     user_id,
@@ -48,17 +49,16 @@ def _write_audit(
             ip_address=ip_address,
         )
         db.add(log)
-        db.flush()
+        await db.flush()
     except Exception:
         pass
 
 
-def _fetch_profile(user: User, db: Session) -> ConsumerProfile:
-    profile = (
-        db.query(ConsumerProfile)
-        .filter(ConsumerProfile.user_id == user.id)
-        .first()
+async def _fetch_profile(user: User, db: AsyncSession) -> ConsumerProfile:
+    result = await db.execute(
+        select(ConsumerProfile).where(ConsumerProfile.user_id == user.id)
     )
+    profile = result.scalar_one_or_none()
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -67,12 +67,11 @@ def _fetch_profile(user: User, db: Session) -> ConsumerProfile:
     return profile
 
 
-def _fetch_restriction(user: User, db: Session) -> Optional[SelfRestriction]:
-    return (
-        db.query(SelfRestriction)
-        .filter(SelfRestriction.user_id == user.id)
-        .first()
+async def _fetch_restriction(user: User, db: AsyncSession) -> Optional[SelfRestriction]:
+    result = await db.execute(
+        select(SelfRestriction).where(SelfRestriction.user_id == user.id)
     )
+    return result.scalar_one_or_none()
 
 
 def _build_profile_response(
@@ -158,10 +157,10 @@ def _build_response(
 
 # ── Public service functions ───────────────────────────────────────────────────
 
-def get_profile(user: User, db: Session) -> ConsumerProfileResponse:
+async def get_profile(user: User, db: AsyncSession) -> ConsumerProfileResponse:
     """Return the consumer's profile with masked Aadhaar (legacy schema)."""
-    profile = _fetch_profile(user, db)
-    restriction = _fetch_restriction(user, db)
+    profile = await _fetch_profile(user, db)
+    restriction = await _fetch_restriction(user, db)
     raw_aadhaar = (
         decrypt_aadhaar(profile.aadhaar_encrypted)
         if profile.aadhaar_encrypted
@@ -170,10 +169,10 @@ def get_profile(user: User, db: Session) -> ConsumerProfileResponse:
     return _build_response(user, profile, restriction, raw_aadhaar)
 
 
-def get_full_profile(user: User, db: Session) -> "ProfileResponse":
+async def get_full_profile(user: User, db: AsyncSession) -> "ProfileResponse":
     """Return the full profile with all new fields (dashboard module schema)."""
-    profile = _fetch_profile(user, db)
-    restriction = _fetch_restriction(user, db)
+    profile = await _fetch_profile(user, db)
+    restriction = await _fetch_restriction(user, db)
     raw_aadhaar = (
         decrypt_aadhaar(profile.aadhaar_encrypted)
         if profile.aadhaar_encrypted
@@ -182,11 +181,11 @@ def get_full_profile(user: User, db: Session) -> "ProfileResponse":
     return _build_profile_response(user, profile, restriction, raw_aadhaar)
 
 
-def update_full_profile(
-    user: User, data: "ProfileUpdateRequest", db: Session
+async def update_full_profile(
+    user: User, data: "ProfileUpdateRequest", db: AsyncSession
 ) -> "ProfileResponse":
     """Update all editable profile fields including new dashboard fields."""
-    profile = _fetch_profile(user, db)
+    profile = await _fetch_profile(user, db)
 
     # Profile-level fields
     profile_fields = {
@@ -209,18 +208,18 @@ def update_full_profile(
         user.mobile_number = data.mobile_number
         updated["mobile_number"] = data.mobile_number
 
-    _write_audit(
+    await _write_audit(
         db,
         AuditEventType.PROFILE_UPDATED,
         user_id=user.id,
         description="Consumer profile updated (dashboard module)",
         metadata_json={"updated_fields": list(updated.keys())},
     )
-    db.commit()
-    db.refresh(profile)
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(profile)
+    await db.refresh(user)
 
-    restriction = _fetch_restriction(user, db)
+    restriction = await _fetch_restriction(user, db)
     raw_aadhaar = (
         decrypt_aadhaar(profile.aadhaar_encrypted)
         if profile.aadhaar_encrypted
@@ -229,13 +228,13 @@ def update_full_profile(
     return _build_profile_response(user, profile, restriction, raw_aadhaar)
 
 
-def update_profile(user: User, data: dict, db: Session) -> ConsumerProfileResponse:
+async def update_profile(user: User, data: dict, db: AsyncSession) -> ConsumerProfileResponse:
     """Update allowed non-sensitive profile fields.
 
     Only district, gender, address, and beverage_preference can be changed here.
     Sensitive fields (Aadhaar, DOB, name) require a separate verified flow.
     """
-    profile = _fetch_profile(user, db)
+    profile = await _fetch_profile(user, db)
 
     allowed_fields = {"district", "gender", "address", "beverage_preference"}
     updated: dict = {}
@@ -249,17 +248,17 @@ def update_profile(user: User, data: dict, db: Session) -> ConsumerProfileRespon
             setattr(profile, field, value)
             updated[field] = str(value)
 
-    _write_audit(
+    await _write_audit(
         db,
         AuditEventType.PROFILE_UPDATED,
         user_id=user.id,
         description="Consumer profile updated",
         metadata_json={"updated_fields": list(updated.keys())},
     )
-    db.commit()
-    db.refresh(profile)
+    await db.commit()
+    await db.refresh(profile)
 
-    restriction = _fetch_restriction(user, db)
+    restriction = await _fetch_restriction(user, db)
     raw_aadhaar = (
         decrypt_aadhaar(profile.aadhaar_encrypted)
         if profile.aadhaar_encrypted
@@ -268,7 +267,7 @@ def update_profile(user: User, data: dict, db: Session) -> ConsumerProfileRespon
     return _build_response(user, profile, restriction, raw_aadhaar)
 
 
-def upload_photo(user: User, file_bytes: bytes, db: Session) -> str:
+async def upload_photo(user: User, file_bytes: bytes, db: AsyncSession) -> str:
     """Strip EXIF, save photo, update profile, write audit.
 
     File is named by user UUID so there is no ambiguity and no path traversal
@@ -283,31 +282,31 @@ def upload_photo(user: User, file_bytes: bytes, db: Session) -> str:
     with open(file_path, "wb") as f:
         f.write(clean_bytes)
 
-    profile = _fetch_profile(user, db)
+    profile = await _fetch_profile(user, db)
     profile.photo_path = file_path
 
-    _write_audit(
+    await _write_audit(
         db,
         AuditEventType.PHOTO_UPLOADED,
         user_id=user.id,
         description="Profile photo updated",
     )
-    db.commit()
+    await db.commit()
     return file_path
 
 
-def toggle_teetotaler(
-    user: User, enabled: bool, db: Session
+async def toggle_teetotaler(
+    user: User, enabled: bool, db: AsyncSession
 ) -> ConsumerProfileResponse:
     """Enable or disable teetotaler mode for the consumer."""
-    profile = _fetch_profile(user, db)
+    profile = await _fetch_profile(user, db)
     profile.is_teetotaler = enabled
     profile.teetotaler_set_at = datetime.now(timezone.utc) if enabled else None
 
     event = (
         AuditEventType.TEETOTALER_ENABLED if enabled else AuditEventType.TEETOTALER_DISABLED
     )
-    _write_audit(
+    await _write_audit(
         db,
         event,
         user_id=user.id,
@@ -330,10 +329,10 @@ def toggle_teetotaler(
     )
     db.add(notification)
 
-    db.commit()
-    db.refresh(profile)
+    await db.commit()
+    await db.refresh(profile)
 
-    restriction = _fetch_restriction(user, db)
+    restriction = await _fetch_restriction(user, db)
     raw_aadhaar = (
         decrypt_aadhaar(profile.aadhaar_encrypted)
         if profile.aadhaar_encrypted

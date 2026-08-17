@@ -1,6 +1,6 @@
 """Operator dashboard endpoint."""
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import require_role
@@ -11,8 +11,8 @@ router = APIRouter()
 
 
 @router.get("/dashboard", summary="Shop operator dashboard — today's stats and recent transactions")
-def get_dashboard(
+async def get_dashboard(
     current_user: User = Depends(require_role("OPERATOR")),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    return operator_service.get_operator_dashboard(current_user, db)
+    return await operator_service.get_operator_dashboard(current_user, db)
