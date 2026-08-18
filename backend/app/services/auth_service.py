@@ -38,24 +38,22 @@ async def register_consumer(data, db: AsyncSession, ip: str):
     Raises HTTP 409 if Aadhaar or mobile is already registered.
     """
     from app.models.consumer_profile import ConsumerProfile, Gender
-    from app.core.security import encrypt_aadhaar, decrypt_aadhaar
+    from app.core.security import encrypt_aadhaar, compute_aadhaar_reference_id
 
-    # ── Duplicate Aadhaar check (PRIMARY — checked first) ─────────────────
-    # Aadhaar is stored encrypted; must decrypt each row to compare.
-    profiles_result = await db.execute(
-        select(ConsumerProfile).where(ConsumerProfile.aadhaar_encrypted.isnot(None))
+    # ── Compute permanent reference ID (HMAC of Aadhaar) ────────────────────
+    aadhaar_ref = compute_aadhaar_reference_id(data.aadhaar_number)
+    aadhaar_last4 = str(data.aadhaar_number).replace(" ", "").replace("-", "")[-4:]
+
+    # ── Duplicate Aadhaar check via unique index (O(1) — fast!) ────────────
+    # Previously: decrypt every row O(n). Now: index lookup O(1).
+    existing_profile = await db.execute(
+        select(ConsumerProfile).where(ConsumerProfile.aadhaar_reference_id == aadhaar_ref)
     )
-    for profile in profiles_result.scalars().all():
-        try:
-            if decrypt_aadhaar(profile.aadhaar_encrypted) == data.aadhaar_number:
-                raise HTTPException(
-                    status_code=http_status.HTTP_409_CONFLICT,
-                    detail="Aadhaar number is already registered. Each Aadhaar can only be linked to one account.",
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            pass  # decryption error on old record — skip safely
+    if existing_profile.scalar_one_or_none():
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail="Aadhaar number is already registered. Each Aadhaar can only be linked to one account.",
+        )
 
     # ── Duplicate mobile check ─────────────────────────────────────────────
     result = await db.execute(select(User).where(User.mobile_number == data.mobile_number))
@@ -94,7 +92,7 @@ async def register_consumer(data, db: AsyncSession, ip: str):
     await db.flush()  # get user.id
 
     # ── Create consumer profile ────────────────────────────────────────────
-    aadhaar_enc = encrypt_aadhaar(data.aadhaar_number)
+    aadhaar_enc = encrypt_aadhaar(data.aadhaar_number)   # kept for login-by-Aadhaar
     profile = ConsumerProfile(
         user_id=user.id,
         dob=data.dob,
@@ -102,6 +100,8 @@ async def register_consumer(data, db: AsyncSession, ip: str):
         district=data.district,
         address=data.address,
         aadhaar_encrypted=aadhaar_enc,
+        aadhaar_reference_id=aadhaar_ref,   # permanent non-reversible HMAC reference
+        aadhaar_last4=aadhaar_last4,        # last 4 digits for display only
     )
     db.add(profile)
     await db.flush()

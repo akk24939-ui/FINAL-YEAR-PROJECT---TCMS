@@ -76,6 +76,9 @@ export const consumerApi = {
   generateQr: () =>
     apiClient.get<QrResponse>('/api/v1/consumer/qr'),
 
+  revokeQr: () =>
+    apiClient.post<QrResponse>('/api/v1/consumer/qr/revoke'),
+
   // ── PDF ─────────────────────────────────────────────────────────────────────
   downloadPdf: (startDate: string, endDate: string) =>
     apiClient.get('/api/v1/consumer/pdf/report', {

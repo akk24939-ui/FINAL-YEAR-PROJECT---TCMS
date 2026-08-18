@@ -21,7 +21,7 @@ from app.models.restriction import SelfRestriction
 from app.models.shop import Shop
 from app.models.system_config import SystemConfig
 from app.models.user import User
-from app.core.security import verify_qr_payload, decrypt_aadhaar, mask_aadhaar
+from app.core.security import mask_aadhaar
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -140,47 +140,111 @@ def _serialize_purchase(p: Purchase) -> dict:
 
 # ── Consumer lookup via QR ────────────────────────────────────────────────────
 
-async def lookup_consumer_by_qr(qr_payload_str: str, db: AsyncSession) -> dict:
-    """Verify QR payload signature, then return safe consumer info for the operator."""
-    import json as _json
-    consumer_user_id: str | None = None
+async def lookup_consumer_by_qr(
+    qr_payload_str: str,
+    db: AsyncSession,
+    *,
+    operator_user_id=None,
+    shop_id: str | None = None,
+    ip: str | None = None,
+) -> dict:
+    """Verify QR payload (v2 or v1), then return safe consumer info for the operator.
 
-    # Manual override path — no HMAC needed
+    v2 path (permanent): payload = {"cid": "<aadhaar_reference_id>", "sig": "<HMAC>"}
+    v1 path (legacy)  : signed token = "<uuid>.<hmac_sig>" (will still work short-term)
+    Manual path        : raw reference_id string or UUID for counter-based lookup
+    """
+    import json as _json
+    from app.services.qr_service import QRService
+
+    consumer: User | None = None
+
+    # ── v2: Try new permanent QR payload {"cid": ..., "sig": ...} ─────────────
     try:
         parsed = _json.loads(qr_payload_str)
-        if parsed.get("manual") is True and parsed.get("uid"):
-            consumer_user_id = str(parsed["uid"]).strip()
+        # v2 permanent QR
+        if parsed.get("cid") and parsed.get("sig"):
+            consumer = await QRService().verify(
+                db, qr_payload_str,
+                operator_user_id=operator_user_id,
+                shop_id=shop_id,
+                ip=ip,
+            )
+        # Manual lookup override (operator typed reference_id or UUID + aadhaar_last4)
+        elif parsed.get("manual") is True and parsed.get("uid"):
+            uid_str = str(parsed["uid"]).strip()
+            aadhaar_last4_input = str(parsed.get("aadhaar_last4", "")).strip()
+
+            # Try looking up by aadhaar_reference_id first (new primary key)
+            profile_r = await db.execute(
+                select(ConsumerProfile).where(ConsumerProfile.aadhaar_reference_id == uid_str)
+            )
+            profile = profile_r.scalar_one_or_none()
+            if profile:
+                user_r = await db.execute(select(User).where(User.id == profile.user_id))
+                consumer = user_r.scalar_one_or_none()
+            else:
+                # Fall back to UUID user_id lookup (legacy operator workflow)
+                user_r = await db.execute(select(User).where(User.id == uid_str))
+                consumer = user_r.scalar_one_or_none()
+                if consumer:
+                    profile_r2 = await db.execute(
+                        select(ConsumerProfile).where(ConsumerProfile.user_id == consumer.id)
+                    )
+                    profile = profile_r2.scalar_one_or_none()
+
+            # ── Aadhaar last-4 second factor ──────────────────────────────────
+            # If operator supplied last4, it MUST match — prevents UUID enumeration.
+            if aadhaar_last4_input and profile:
+                stored_last4 = (profile.aadhaar_last4 or "").strip()
+                if stored_last4 and stored_last4 != aadhaar_last4_input:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Aadhaar last 4 digits do not match. Please verify with the consumer.",
+                    )
+            elif aadhaar_last4_input and not profile:
+                # uid matched nothing; raise generic error (don't confirm existence)
+                raise HTTPException(
+                    status_code=400,
+                    detail="Consumer not found. Check the Reference ID and Aadhaar last 4 digits.",
+                )
+    except HTTPException:
+        raise
     except Exception:
         pass
 
-    # Normal QR path — verify HMAC signature
-    if consumer_user_id is None:
+    # ── v1 fallback: signed token format "<uid>.<hmac>" ───────────────────────
+    if consumer is None and not qr_payload_str.startswith("{"):
+        from app.core.security import verify_qr_payload
         try:
             payload = verify_qr_payload(qr_payload_str)
-            consumer_user_id = payload["uid"]
+            uid_str = payload["uid"]
+            user_r = await db.execute(select(User).where(User.id == uid_str))
+            consumer = user_r.scalar_one_or_none()
         except Exception:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid or expired QR code. Ask consumer to refresh their QR."
-            )
+            pass
+
+    if consumer is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid QR code. Ask consumer to show their QR Code page."
+        )
+
+    if not consumer.is_active:
+        raise HTTPException(status_code=403, detail="Consumer account is inactive.")
 
     profile_result = await db.execute(
-        select(ConsumerProfile).where(ConsumerProfile.user_id == consumer_user_id)
+        select(ConsumerProfile).where(ConsumerProfile.user_id == consumer.id)
     )
     profile = profile_result.scalar_one_or_none()
     if not profile:
         raise HTTPException(status_code=404, detail="Consumer profile not found.")
 
-    user_result = await db.execute(select(User).where(User.id == consumer_user_id))
-    user = user_result.scalar_one_or_none()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=403, detail="Consumer account is inactive.")
-
     # Self-restriction check
     now_utc = datetime.now(timezone.utc)
     restriction_result = await db.execute(
         select(SelfRestriction).where(
-            SelfRestriction.user_id == consumer_user_id,
+            SelfRestriction.user_id == consumer.id,
             SelfRestriction.is_locked == True,  # noqa
         ).where(
             (SelfRestriction.locked_until == None) | (SelfRestriction.locked_until > now_utc)  # noqa
@@ -197,8 +261,8 @@ async def lookup_consumer_by_qr(qr_payload_str: str, db: AsyncSession) -> dict:
             detail=f"Consumer has a self-restriction active until {until_str}. Purchase blocked."
         )
 
-    today_ml = await _today_consumed_ml(uuid.UUID(str(consumer_user_id)), db)
-    week_ml = await _week_consumed_ml(uuid.UUID(str(consumer_user_id)), db)
+    today_ml = await _today_consumed_ml(consumer.id, db)
+    week_ml = await _week_consumed_ml(consumer.id, db)
 
     daily_limit_ml = 960
     weekly_limit_ml = 4800
@@ -207,7 +271,7 @@ async def lookup_consumer_by_qr(qr_payload_str: str, db: AsyncSession) -> dict:
 
     dr_result = await db.execute(
         select(DoctorRestriction).where(
-            DoctorRestriction.patient_user_id == consumer_user_id,
+            DoctorRestriction.patient_user_id == consumer.id,
             DoctorRestriction.status == RestrictionStatus.ACTIVE.value,
         )
     )
@@ -222,13 +286,23 @@ async def lookup_consumer_by_qr(qr_payload_str: str, db: AsyncSession) -> dict:
     }
     medical_block_label = _CATEGORY_LABELS.get(medical_block_category, "Medical") if medical_block_category else None
 
+    # Display Aadhaar as XXXX XXXX XXXX-last4 (no decryption needed)
+    aadhaar_display = None
+    if profile.aadhaar_last4:
+        aadhaar_display = f"XXXX XXXX {profile.aadhaar_last4}"
+    elif profile.aadhaar_encrypted:
+        # Legacy fallback — only decrypt if aadhaar_last4 not yet populated
+        from app.core.security import decrypt_aadhaar
+        try:
+            aadhaar_display = mask_aadhaar(decrypt_aadhaar(profile.aadhaar_encrypted))
+        except Exception:
+            aadhaar_display = "XXXX XXXX XXXX"
+
     return {
-        "consumer_user_id": str(consumer_user_id),
-        "full_name": user.full_name,
-        "aadhaar_masked": (
-            mask_aadhaar(decrypt_aadhaar(profile.aadhaar_encrypted))
-            if profile and profile.aadhaar_encrypted else None
-        ),
+        "consumer_user_id": str(consumer.id),
+        "consumer_reference_id": profile.aadhaar_reference_id,
+        "full_name": consumer.full_name,
+        "aadhaar_masked": aadhaar_display,
         "district": profile.district,
         "is_teetotaler": profile.is_teetotaler,
         "daily_limit_ml": daily_limit_ml,

@@ -150,7 +150,7 @@ async def generate_pdf(
         pdf.add_page()
 
         pdf.set_font("Helvetica", "B", 18)
-        pdf.cell(0, 10, "Smart TASMAC — Purchase History Report", ln=True, align="C")
+        pdf.cell(0, 10, "Smart TASMAC - Purchase History Report", ln=True, align="C")
         pdf.set_font("Helvetica", "", 11)
         pdf.cell(0, 8, f"Consumer: {user.full_name}  |  Aadhaar: {masked_aadhaar}", ln=True, align="C")
         pdf.cell(
@@ -170,7 +170,7 @@ async def generate_pdf(
         pdf.set_font("Helvetica", "", 11)
         pdf.cell(0, 7, f"Total Volume: {total_ml} ml", ln=True)
         pdf.cell(0, 7, f"Total Standard Drinks: {total_sd}", ln=True)
-        pdf.cell(0, 7, f"Total Spent: \u20b9{total_spend}", ln=True)
+        pdf.cell(0, 7, f"Total Spent: Rs. {total_spend}", ln=True)
         pdf.ln(5)
 
         pdf.set_font("Helvetica", "B", 12)
@@ -183,7 +183,7 @@ async def generate_pdf(
         pdf.cell(0, 8, "Transaction Details", ln=True)
 
         col_widths = [38, 62, 30, 25, 30]
-        headers = ["Date", "Product", "Volume (ml)", "Std Drinks", "Price (\u20b9)"]
+        headers = ["Date", "Product", "Volume (ml)", "Std Drinks", "Price (Rs.)"]
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(37, 99, 235)
         pdf.set_text_color(255, 255, 255)

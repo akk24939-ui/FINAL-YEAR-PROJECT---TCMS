@@ -56,8 +56,20 @@ class ConsumerProfile(Base):
         index=True,
     )
 
-    # ── Mock Aadhaar (encrypted at rest) ──────────────────────────────────────
-    # Store Fernet-encrypted bytes as a base64 string.
+    # ── Aadhaar reference (HMAC-SHA256, permanent, non-reversible) ──────────────
+    # HMAC-SHA256(aadhaar_number, SERVER_SECRET) — stored instead of raw Aadhaar.
+    # Deterministic: same Aadhaar → same cid. Non-reversible: DB breach can’t recover Aadhaar.
+    # Used as the QR payload 'cid' and as the primary consumer lookup key.
+    # Per DPDP Act 2023 / Aadhaar Act 2016 data-minimization requirements.
+    aadhaar_reference_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+
+    # Last 4 digits of Aadhaar — for display/support purposes only (e.g. XXXX-XXXX-1234).
+    # NEVER the full 12-digit number.
+    aadhaar_last4: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+
+    # ── Mock Aadhaar (Fernet-encrypted at rest) — kept for login-by-Aadhaar lookup ──
     # NEVER store raw number; NEVER return more than last 4 digits via API.
     aadhaar_encrypted: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True

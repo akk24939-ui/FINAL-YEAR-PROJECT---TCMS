@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     # Encryption
     field_encryption_key: str
     qr_hmac_secret: str
+    # Previous QR HMAC key — used during key rotation grace period (leave empty if no rotation in progress)
+    qr_hmac_secret_prev: str = ""
+    # Rate-limit: max QR scans per cid per minute (brute-force protection)
+    qr_scan_rate_limit_per_minute: int = 10
 
     # App
     frontend_origin: str = "http://localhost:5173"

@@ -1,0 +1,17 @@
+node_modules/
+**/node_modules/
+__pycache__/
+**/__pycache__/
+.env
+**/.env
+*.log
+**/*.log
+.pytest_cache/
+**/.pytest_cache/
+frontend/node_modules/
+backend/app/api/v1/__pycache__/
+backend/app/core/__pycache__/
+backend/app/models/__pycache__/
+backend/app/services/__pycache__/
+backend/app/api/v1/consumer/__pycache__/
+backend/app/api/v1/operator/__pycache__/

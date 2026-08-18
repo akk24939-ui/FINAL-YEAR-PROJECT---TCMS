@@ -443,7 +443,7 @@ const ReportsPage: React.FC = () => {
             icon={<Users className="w-5 h-5 text-emerald-600" />}
             label="Total Consumers"
             value={summary.total_consumers}
-            sub={`${summary.restricted_consumers.toLocaleString()} restricted`}
+            sub={`${(summary.restricted_consumers ?? 0).toLocaleString()} restricted`}
             color="bg-emerald-50 dark:bg-emerald-900/20"
           />
           <KpiCard
@@ -455,8 +455,8 @@ const ReportsPage: React.FC = () => {
           <KpiCard
             icon={<TrendingUp className="w-5 h-5 text-purple-600" />}
             label="Total Revenue"
-            value={formatINR(summary.total_revenue)}
-            sub={`${summary.districts_covered} districts`}
+            value={formatINR(Number(summary.total_revenue ?? 0))}
+            sub={`${summary.districts_covered ?? 0} districts`}
             color="bg-purple-50 dark:bg-purple-900/20"
           />
         </div>
@@ -616,10 +616,10 @@ const ReportsPage: React.FC = () => {
               {(districtData?.data ?? []).map(d => (
                 <tr key={d.district} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/30 transition">
                   <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">{d.district}</td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{d.total_purchases.toLocaleString()}</td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{formatINR(Number(d.total_revenue))}</td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{Number(d.total_drinks).toFixed(1)}</td>
-                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{d.unique_consumers.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{(d.total_purchases ?? 0).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{formatINR(Number(d.total_revenue ?? 0))}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{Number(d.total_drinks ?? 0).toFixed(1)}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-400">{(d.unique_consumers ?? 0).toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>

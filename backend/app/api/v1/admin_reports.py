@@ -28,7 +28,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import require_role
+from app.core.dependencies import require_role
 from app.models.models import AuditLog, ConsumerProfile, Product, Purchase, SelfRestriction, Shop, User
 from app.schemas.report_schemas import (
     AgeGroupResponse,

@@ -61,7 +61,7 @@ async def main() -> None:
         user.token_version = (user.token_version or 0) + 1
         await db.commit()
 
-        print(f"✅ Password reset for user: {user.full_name} ({str(user.id)[:8]}...)")
+        print(f"Password reset for user: {user.full_name} ({str(user.id)[:8]}...)")
         print(f"   Mobile : {user.mobile_number}")
         print(f"   New pw : {new_password}")
         print("   You can now log in with your mobile number or Aadhaar.")

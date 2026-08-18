@@ -1,12 +1,13 @@
-"""QrCode model — signed QR payload for shop verification.
+"""QrCode model — permanent HMAC-signed QR for shop verification.
 
-Security design:
-- The QR payload is an HMAC-signed JSON blob: { user_id, issued_at, expires_at, sig }.
+Security design (v2 — permanent QR):
+- Payload shape: {"cid": "<aadhaar_reference_id>", "sig": "<HMAC-SHA256>"}
+- No iat/exp in the QR — QR does not expire on its own.
+- 'cid' is HMAC-SHA256 of the consumer’s Aadhaar number — non-reversible.
 - RAW PERSONAL DATA (name, Aadhaar, phone) is NEVER embedded in the QR.
-- The shop operator module (future) will POST the payload to /api/qr/verify,
-  which re-computes the HMAC and checks expiry server-side.
-- A new QR is generated on demand; old ones are invalidated by `is_active=False`.
-- Expiry: configurable, default 30 minutes (QR_TTL_SECONDS in settings).
+- Compensating controls: scan rate-limit per cid, full audit log, consumer-initiated revocation.
+- Revocation: consumer can regenerate QR (old cid blacklisted, new row issued).
+- One active QR per user at a time (is_active=True, is_revoked=False).
 """
 import uuid
 from datetime import datetime
@@ -32,22 +33,36 @@ class QrCode(Base):
         index=True,
     )
 
+    # ── Permanent consumer reference ID (v2) ──────────────────────────────────
+    # HMAC-SHA256 of consumer's Aadhaar (= ConsumerProfile.aadhaar_reference_id).
+    # This is the 'cid' embedded in the QR payload. Non-reversible, permanent.
+    consumer_reference_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+
     # The HMAC-signed payload stored as a JSON string.
-    # Shape: {"uid": "<uuid>", "iat": <unix_ts>, "exp": <unix_ts>, "sig": "<hex>"}
-    # This is what gets encoded into the QR image.
+    # v2 shape: {"cid": "<aadhaar_reference_id>", "sig": "<HMAC-hex>"}
+    # v1 shape (legacy): {"uid": "<uuid>", "iat": <ts>, "exp": <ts>, "sig": "<hex>"}
     hmac_payload: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # Convenience columns derived from the payload (for server-side expiry checks)
+    # Issued-at timestamp (informational; no expiry logic for v2 QRs).
     issued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    # expires_at kept for DB compatibility; set to year 2099 for new v2 QRs (never expires).
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
 
-    # Only one active QR per user at a time.
-    # Generating a new QR deactivates all previous ones for this user.
+    # Only one active, non-revoked QR per user at a time.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Revocation — consumer can request QR regeneration as a security action.
+    # Revoked QRs are permanently blacklisted.
+    is_revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Optional: which IP requested this QR (for audit).
     requested_from_ip: Mapped[Optional[str]] = mapped_column(

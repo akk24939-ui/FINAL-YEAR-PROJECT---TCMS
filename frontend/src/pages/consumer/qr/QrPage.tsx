@@ -1,109 +1,146 @@
 import React, { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { QrCode, RefreshCw, ShieldCheck, Clock } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Shield, RefreshCw, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react'
 import { consumerApi } from '../../../api/consumer.api'
-import { useThemeStore } from '../../../store/themeStore'
+import type { QrResponse } from '../../../types/consumer.types'
+import { getErrorMessage } from '../../../utils/getErrorMessage'
 
-const QrPage: React.FC = () => {
-  const { theme } = useThemeStore()
-  const isDark = theme === 'dark'
-  const [refreshKey, setRefreshKey] = useState(0)
+// ── Component ────────────────────────────────────────────────────────────────
+export default function QrPage() {
+  const qc = useQueryClient()
+  const [showRevokeConfirm, setShowRevokeConfirm] = useState(false)
+  const [revokeError, setRevokeError] = useState('')
+  const [revokeSuccess, setRevokeSuccess] = useState(false)
 
-  const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['consumer-qr', refreshKey],
-    queryFn: () => consumerApi.generateQr().then(r => r.data),
-    staleTime: 0,
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['consumer-qr'],
+    queryFn: () => consumerApi.generateQr().then((r) => r.data),
+    // QR is permanent — no auto-refresh needed
+    staleTime: Infinity,
+    retry: 2,
   })
 
-  const expiresAt = data?.expires_at ? new Date(data.expires_at) : null
-  const timeLeft = expiresAt ? Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000)) : 0
-  const mins = Math.floor(timeLeft / 60)
-  const secs = timeLeft % 60
-
-  const cardBg = isDark ? 'rgba(26,60,52,0.5)' : 'white'
-  const textMain = isDark ? '#F0FDF4' : '#1A3C34'
-  const textSub = isDark ? '#9CA3AF' : '#6B7280'
+  const revokeMut = useMutation({
+    mutationFn: () => consumerApi.revokeQr(),
+    onSuccess: (res) => {
+      setShowRevokeConfirm(false)
+      setRevokeError('')
+      setRevokeSuccess(true)
+      // res is AxiosResponse<QrResponse>
+      qc.setQueryData<QrResponse>(['consumer-qr'], res.data)
+    },
+    onError: (err: unknown) => {
+      setRevokeError(getErrorMessage(err, 'Failed to regenerate QR. Please try again.'))
+    },
+  })
 
   return (
-    <div className="min-h-screen p-6" style={{ background: isDark ? '#0D1F1A' : '#F8FAFC' }}>
-      <div className="max-w-md mx-auto">
-        <h1 className="text-2xl font-bold mb-2" style={{ color: textMain }}>Your QR Code</h1>
-        <p className="text-sm mb-8" style={{ color: textSub }}>
-          Show this to the shop operator. No personal data is embedded.
+    <div className="max-w-md mx-auto px-4 py-8 space-y-6">
+      {/* Header */}
+      <div className="text-center space-y-1">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">My QR Code</h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Show this at the shop counter to verify your identity.
         </p>
+      </div>
 
-        {/* Security notice */}
-        <div className="flex items-center gap-3 mb-6 p-4 rounded-xl border" style={{
-          background: isDark ? 'rgba(26,60,52,0.3)' : '#F0FDF4',
-          borderColor: isDark ? 'rgba(212,175,55,0.2)' : 'rgba(26,60,52,0.2)'
-        }}>
-          <ShieldCheck className="w-5 h-5 text-green-500 flex-shrink-0" />
-          <p className="text-xs" style={{ color: textSub }}>
-            This QR contains an HMAC-signed token only — your name, Aadhaar, and personal details are never embedded.
+      {/* Success banner */}
+      {revokeSuccess && (
+        <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 rounded-xl px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          Your QR has been regenerated. The old one will no longer work at shops.
+        </div>
+      )}
+
+      {/* QR Image card */}
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 flex flex-col items-center gap-4">
+        {isLoading && (
+          <div className="flex flex-col items-center gap-2 py-8 text-gray-400">
+            <Loader2 className="w-8 h-8 animate-spin" />
+            <span className="text-sm">Loading your QR…</span>
+          </div>
+        )}
+
+        {isError && (
+          <div className="flex flex-col items-center gap-2 py-8 text-red-500">
+            <AlertTriangle className="w-8 h-8" />
+            <span className="text-sm font-medium">Could not load QR code.</span>
+            <button
+              className="text-xs underline mt-1"
+              onClick={() => qc.invalidateQueries({ queryKey: ['consumer-qr'] })}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {data?.qr_image_base64 && (
+          <>
+            <img
+              src={`data:image/png;base64,${data.qr_image_base64}`}
+              alt="Your TASMAC Consumer QR Code"
+              className="w-56 h-56 rounded-lg border-4 border-emerald-100 dark:border-emerald-900 shadow"
+            />
+
+            {/* Permanent badge */}
+            <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 text-sm font-medium">
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Permanent QR — no expiry</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Security panel */}
+      <div className="bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-xl p-4 space-y-3">
+        <div className="flex items-start gap-2">
+          <Shield className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            Your QR is secured with an HMAC signature — tampering is instantly detected.
+            If you believe your QR was photographed by someone else, regenerate it below.
           </p>
         </div>
 
-        {/* QR Card */}
-        <div className="rounded-2xl border p-8 text-center" style={{
-          background: cardBg,
-          borderColor: isDark ? 'rgba(212,175,55,0.2)' : 'rgba(26,60,52,0.1)',
-          boxShadow: isDark ? '0 8px 32px rgba(0,0,0,0.4)' : '0 8px 32px rgba(26,60,52,0.08)'
-        }}>
-          {isLoading && (
-            <div className="flex flex-col items-center gap-4 py-12">
-              <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
-              <p style={{ color: textSub }}>Generating secure QR...</p>
-            </div>
-          )}
+        {revokeError && (
+          <p className="text-xs text-red-500 dark:text-red-400">{revokeError}</p>
+        )}
 
-          {error && (
-            <div className="py-12">
-              <QrCode className="w-16 h-16 mx-auto mb-4 text-red-400" />
-              <p className="text-red-400 mb-4">Failed to generate QR code</p>
-              <button onClick={() => refetch()}
-                className="px-4 py-2 rounded-lg text-white text-sm font-semibold"
-                style={{ background: '#1A3C34' }}>
-                Try Again
-              </button>
-            </div>
-          )}
-
-          {data && !isLoading && (
-            <>
-              <div className="inline-block p-4 bg-white rounded-xl shadow-lg mb-4">
-                <img
-                  src={`data:image/png;base64,${data.qr_image_base64}`}
-                  alt="Consumer QR Code"
-                  className="w-56 h-56"
-                />
-              </div>
-
-              {/* Expiry timer */}
-              {expiresAt && (
-                <div className="flex items-center justify-center gap-2 mb-6">
-                  <Clock className="w-4 h-4" style={{ color: timeLeft < 300 ? '#EF4444' : '#22C55E' }} />
-                  <span className="font-mono text-sm font-bold" style={{
-                    color: timeLeft < 300 ? '#EF4444' : (isDark ? '#22C55E' : '#16A34A')
-                  }}>
-                    Expires in {String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}
-                  </span>
-                </div>
-              )}
-
+        {/* Revoke dialog trigger */}
+        {!showRevokeConfirm ? (
+          <button
+            onClick={() => { setRevokeSuccess(false); setShowRevokeConfirm(true) }}
+            className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-amber-400 dark:border-amber-600 text-amber-700 dark:text-amber-300 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900 transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Regenerate QR (Security Action)
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-red-600 dark:text-red-400">
+              ⚠ Your current QR will stop working immediately at all shop counters. Proceed?
+            </p>
+            <div className="flex gap-2">
               <button
-                onClick={() => { setRefreshKey(k => k + 1) }}
-                className="flex items-center gap-2 mx-auto px-6 py-2.5 rounded-xl text-white text-sm font-semibold transition-all hover:scale-105"
-                style={{ background: 'linear-gradient(135deg, #1A3C34, #2D6A4F)' }}
+                onClick={() => revokeMut.mutate()}
+                disabled={revokeMut.isPending}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-60 transition-colors"
               >
-                <RefreshCw className="w-4 h-4" />
-                Refresh QR
+                {revokeMut.isPending
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Regenerating…</>
+                  : 'Yes, Regenerate'
+                }
               </button>
-            </>
-          )}
-        </div>
+              <button
+                onClick={() => setShowRevokeConfirm(false)}
+                disabled={revokeMut.isPending}
+                className="flex-1 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
 }
-
-export default QrPage

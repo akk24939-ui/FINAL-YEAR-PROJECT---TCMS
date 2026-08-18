@@ -198,8 +198,9 @@ export interface PaginatedPurchases {
 // ── QR ────────────────────────────────────────────────────────────────────────
 export interface QrResponse {
   qr_image_base64: string
-  expires_at: string
+  expires_at?: string    // undefined for v2 permanent QR
   issued_at: string
+  is_permanent?: boolean
 }
 
 // ── Legacy limit types (used by SelfRestriction routes) ───────────────────────

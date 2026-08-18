@@ -1,14 +1,13 @@
 /**
  * ScanAndSellPage — 5-step operator workflow with THREE scan methods:
- *   Mode 1: 📷 Camera (html5-qrcode — live camera scan)
+ *   Mode 1: 📷 Camera (native getUserMedia — live camera scan)
  *   Mode 2: 📋 Paste  (paste QR JSON from clipboard — auto-wraps missing braces)
- *   Mode 3: 🔢 Manual (type consumer ID directly, for hardware scanner output)
+ *   Mode 3: 🔢 Manual (type consumer reference ID directly)
  *
  * Steps: Scan QR → Eligibility → Product → Confirm → Receipt
  */
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { Html5Qrcode } from 'html5-qrcode'
 import {
   ScanLine, Search, ShoppingCart, CheckCircle2, AlertTriangle,
   XCircle, ChevronRight, RotateCcw, Loader2, Package,
@@ -72,55 +71,167 @@ const StatusBadge: React.FC<{ eligible: boolean; label: string }> = ({ eligible,
 )
 
 // ─── Camera Scanner Sub-Component ─────────────────────────────────────────────
-const CameraScanner: React.FC<{ onScan: (payload: string) => void; onError: (msg: string) => void }> = ({ onScan, onError }) => {
+/**
+ * CameraScanner — native getUserMedia implementation.
+ *
+ * Why native instead of html5-qrcode?
+ *  1. Explicit <video autoPlay muted playsInline> avoids browser autoplay blocks.
+ *  2. Full control over DOMException.name for user-friendly error messages.
+ *  3. Proper MediaStreamTrack.stop() on unmount prevents ghost camera indicators.
+ *  4. BarcodeDetector (Chrome 83+) + jsQR fallback for broad browser support.
+ *
+ * Security note: getUserMedia requires a secure context (HTTPS or localhost).
+ * On a plain HTTP LAN IP this will silently return undefined — handled below.
+ */
+const CameraScanner: React.FC<{
+  onScan: (payload: string) => void
+  onError: (msg: string) => void
+  onSwitchToPaste?: () => void
+}> = ({ onScan, onError, onSwitchToPaste }) => {
   const [started, setStarted] = useState(false)
   const [loading, setLoading] = useState(false)
   const [camError, setCamError] = useState('')
-  const scannerRef = useRef<Html5Qrcode | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const rafRef = useRef<number>(0)
   const mountedRef = useRef(true)
+  const scannedRef = useRef(false)
+
+  // ── jsQR lazy import ──────────────────────────────────────────────────────
+  const jsQrRef = useRef<((data: Uint8ClampedArray, width: number, height: number) => { data: string } | null) | null>(null)
+
+  // ── QR decode using BarcodeDetector or jsQR ───────────────────────────────
+  const decodeFrame = useCallback(async (video: HTMLVideoElement) => {
+    if (!video || video.readyState < 2 || scannedRef.current) return
+
+    // Try BarcodeDetector first (native, fast)
+    if ('BarcodeDetector' in window) {
+      try {
+        // @ts-ignore — BarcodeDetector not yet in TS dom lib
+        const bd = new window.BarcodeDetector({ formats: ['qr_code'] })
+        const barcodes = await bd.detect(video)
+        if (barcodes.length > 0 && mountedRef.current) {
+          scannedRef.current = true
+          onScan(normalizeQrPayload(barcodes[0].rawValue))
+          return
+        }
+      } catch { /* BarcodeDetector failed — fall through to jsQR */ }
+    }
+
+    // jsQR fallback (Firefox/Safari)
+    const canvas = document.createElement('canvas')
+    const w = video.videoWidth || 320
+    const h = video.videoHeight || 240
+    canvas.width = w; canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(video, 0, 0, w, h)
+    const imageData = ctx.getImageData(0, 0, w, h)
+
+    if (!jsQrRef.current) {
+      try {
+        const mod = await import('jsqr')
+        jsQrRef.current = mod.default
+      } catch { return }
+    }
+    const code = jsQrRef.current(imageData.data, imageData.width, imageData.height)
+    if (code && mountedRef.current) {
+      scannedRef.current = true
+      onScan(normalizeQrPayload(code.data))
+    }
+  }, [onScan])
+
+  // ── Scan loop ─────────────────────────────────────────────────────────────
+  const scanLoop = useCallback(() => {
+    if (!mountedRef.current || scannedRef.current) return
+    const video = videoRef.current
+    if (video) decodeFrame(video)
+    rafRef.current = requestAnimationFrame(scanLoop)
+  }, [decodeFrame])
+
+  const stopCamera = useCallback(() => {
+    cancelAnimationFrame(rafRef.current)
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+    }
+    if (videoRef.current) videoRef.current.srcObject = null
+    if (mountedRef.current) { setStarted(false); scannedRef.current = false }
+  }, [])
 
   const startCamera = useCallback(async () => {
-    setLoading(true); setCamError('')
+    setLoading(true); setCamError(''); scannedRef.current = false
+
+    // ── Check secure context (required for getUserMedia) ──────────────────
+    if (!window.isSecureContext) {
+      const msg = 'Camera requires a secure connection (HTTPS or localhost). Use Paste QR instead.'
+      setCamError(msg); onError(msg); setLoading(false); return
+    }
+
+    // ── Check API availability ─────────────────────────────────────────────
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const msg = 'Camera API not available in this browser. Use Paste QR or Manual ID instead.'
+      setCamError(msg); onError(msg); setLoading(false); return
+    }
+
     try {
-      const scanner = new Html5Qrcode('qr-camera-reader')
-      scannerRef.current = scanner
-      await scanner.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        (decoded) => {
-          if (mountedRef.current) {
-            onScan(normalizeQrPayload(decoded))
-          }
-        },
-        () => { /* ignore non-QR frames */ }
-      )
-      if (mountedRef.current) setStarted(true)
-    } catch (err) {
-      let msg = 'Could not start camera. Use Paste mode to enter the QR payload.'
-      const errStr = String(err)
-      if (errStr.includes('Permission') || errStr.includes('NotAllowed') || errStr.includes('denied')) {
-        msg = 'Camera permission denied. Please allow camera access in your browser settings and try again.'
-      } else if (errStr.includes('NotFound') || errStr.includes('no camera')) {
-        msg = 'No camera found on this device. Use Paste or Manual ID mode instead.'
-      } else if (errStr.includes('NotReadableError') || errStr.includes('in use')) {
-        msg = 'Camera is in use by another app. Close other apps and try again.'
-      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      })
+      streamRef.current = stream
+
+      const video = videoRef.current
+      if (!video || !mountedRef.current) { stream.getTracks().forEach((t) => t.stop()); setLoading(false); return }
+
+      // Attach stream — MUST use srcObject (not src) for MediaStream
+      video.srcObject = stream
+      // playsInline + muted are set as HTML attributes; call play() explicitly
+      await video.play()
+
       if (mountedRef.current) {
-        setCamError(msg)
-        onError(msg)  // pass msg directly, not stale camError state
+        setStarted(true)
+        rafRef.current = requestAnimationFrame(scanLoop)
       }
+    } catch (err) {
+      if (!mountedRef.current) return
+      const domErr = err as DOMException
+      let msg = 'Could not start camera. Use Paste QR mode instead.'
+      switch (domErr.name) {
+        case 'NotAllowedError':
+        case 'PermissionDeniedError':
+          msg = 'Camera permission denied. Click the camera icon in your browser address bar to allow access, then try again.'
+          break
+        case 'NotFoundError':
+        case 'DevicesNotFoundError':
+          msg = 'No camera found on this device. Use Paste QR or Manual ID mode instead.'
+          break
+        case 'NotReadableError':
+        case 'TrackStartError':
+          msg = 'Camera is in use by another application. Close it and try again.'
+          break
+        case 'OverconstrainedError':
+          // Try again without environment constraint
+          try {
+            const stream2 = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+            streamRef.current = stream2
+            const v = videoRef.current
+            if (v && mountedRef.current) {
+              v.srcObject = stream2; await v.play()
+              setStarted(true); rafRef.current = requestAnimationFrame(scanLoop); setLoading(false); return
+            }
+          } catch { /* fall through */ }
+          msg = 'Rear camera unavailable. Trying front camera — if it fails, use Paste QR instead.'
+          break
+        default:
+          msg = `Camera error (${domErr.name}): ${domErr.message || 'Unknown'}. Use Paste QR instead.`
+          if (import.meta.env.DEV) console.error('[CameraScanner]', domErr.name, domErr.message)
+      }
+      setCamError(msg); onError(msg)
     } finally {
       if (mountedRef.current) setLoading(false)
     }
-  }, [onScan, onError])
-
-  const stopCamera = useCallback(async () => {
-    if (scannerRef.current) {
-      try { await scannerRef.current.stop() } catch { /* ignore */ }
-      scannerRef.current = null
-    }
-    if (mountedRef.current) setStarted(false)
-  }, [])
+  }, [onScan, onError, scanLoop])
 
   useEffect(() => {
     mountedRef.current = true
@@ -132,11 +243,15 @@ const CameraScanner: React.FC<{ onScan: (payload: string) => void; onError: (msg
 
   return (
     <div className="space-y-4">
-      {/* Camera viewport */}
-      <div
-        id="qr-camera-reader"
-        className="w-full rounded-xl overflow-hidden bg-black"
-        style={{ minHeight: started ? 280 : 0, display: started ? 'block' : 'none' }}
+      {/* Native video element — autoPlay muted playsInline are critical for mobile */}
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        className={`w-full rounded-xl bg-black object-cover ${started ? 'block' : 'hidden'}`}
+        style={{ minHeight: started ? 280 : 0 }}
+        aria-label="Camera viewfinder for QR scanning"
       />
 
       {!started && !loading && (
@@ -144,10 +259,20 @@ const CameraScanner: React.FC<{ onScan: (payload: string) => void; onError: (msg
           <Camera className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
           <p className="text-sm font-semibold text-gray-500 dark:text-gray-400 mb-1">Camera QR Scanner</p>
           <p className="text-xs text-gray-400 dark:text-gray-600 mb-4">
-            Point the camera at the consumer's QR code. Works on phone & desktop.
+            Point the camera at the consumer's QR code. Detection is automatic.
           </p>
           {camError && (
-            <p className="text-xs text-red-500 dark:text-red-400 mb-4 bg-red-50 dark:bg-red-500/10 px-3 py-2 rounded-lg">{camError}</p>
+            <div className="mb-4 space-y-2">
+              <p className="text-xs text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-500/10 px-3 py-2 rounded-lg">
+                {camError}
+              </p>
+              <button
+                onClick={() => { setCamError(''); onSwitchToPaste?.() }}
+                className="text-xs text-blue-600 dark:text-blue-400 underline"
+              >
+                Switch to Paste QR instead →
+              </button>
+            </div>
           )}
           <button
             onClick={startCamera}
@@ -161,7 +286,7 @@ const CameraScanner: React.FC<{ onScan: (payload: string) => void; onError: (msg
       {loading && (
         <div className="flex items-center justify-center gap-2 py-8 text-gray-500">
           <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-sm">Starting camera…</span>
+          <span className="text-sm">Requesting camera permission…</span>
         </div>
       )}
 
@@ -184,12 +309,16 @@ const CameraScanner: React.FC<{ onScan: (payload: string) => void; onError: (msg
   )
 }
 
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 const ScanAndSellPage: React.FC = () => {
   const [step, setStep] = useState<Step>('scan')
   const [scanMode, setScanMode] = useState<ScanMode>('camera')
   const [qrInput, setQrInput] = useState('')
   const [manualId, setManualId] = useState('')
+  const [manualAadhaarLast4, setManualAadhaarLast4] = useState('')
+  // uid extracted from an expired paste-QR payload for fallback lookup
+  const [expiredPayloadUid, setExpiredPayloadUid] = useState<string | null>(null)
   const [consumer, setConsumer] = useState<ConsumerLookupResult | null>(null)
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
   const [productSearch, setProductSearch] = useState('')
@@ -214,12 +343,38 @@ const ScanAndSellPage: React.FC = () => {
     p.name.toLowerCase().includes(productSearch.toLowerCase())
   )
 
-  // Consumer lookup
+  // ── Consumer lookup helpers ─────────────────────────────────────────────────
+
+  /** Try to extract the `uid` field from a pasted QR JSON (works even if token is expired) */
+  const extractUidFromPayload = (raw: string): string | null => {
+    try {
+      const parsed = JSON.parse(normalizeQrPayload(raw))
+      return parsed?.uid ? String(parsed.uid) : null
+    } catch { return null }
+  }
+
+  // QR lookup (camera / paste)
   const lookupMutation = useMutation({
     mutationFn: (payload: string) => operatorConsumerApi.lookupByQR(payload),
-    onSuccess: (res) => { setConsumer(res.data); setLookupError(''); setStep('eligibility') },
+    onSuccess: (res) => { setConsumer(res.data); setLookupError(''); setExpiredPayloadUid(null); setStep('eligibility') },
     onError: (err: unknown) => {
-      setLookupError(getErrorMessage(err, 'Invalid or expired QR code. Ask the consumer to refresh their QR.'))
+      const msg = getErrorMessage(err, 'Invalid or expired QR code.')
+      setLookupError(msg)
+      // If expired, extract the uid so operator can do a 1-click fallback
+      if (msg.toLowerCase().includes('expir') || msg.toLowerCase().includes('invalid')) {
+        const uid = extractUidFromPayload(qrInput)
+        setExpiredPayloadUid(uid)
+      }
+    },
+  })
+
+  // Reference ID + Aadhaar last-4 fallback lookup
+  const refLookupMutation = useMutation({
+    mutationFn: ({ refId, last4 }: { refId: string; last4: string }) =>
+      operatorConsumerApi.lookupByRef(refId, last4),
+    onSuccess: (res) => { setConsumer(res.data); setLookupError(''); setExpiredPayloadUid(null); setStep('eligibility') },
+    onError: (err: unknown) => {
+      setLookupError(getErrorMessage(err, 'Manual lookup failed. Check the Reference ID and Aadhaar last 4 digits.'))
     },
   })
 
@@ -237,12 +392,13 @@ const ScanAndSellPage: React.FC = () => {
   })
 
   const handleQrScanned = useCallback((payload: string) => {
-    setLookupError('')
+    setLookupError(''); setExpiredPayloadUid(null)
     lookupMutation.mutate(payload)
   }, [lookupMutation])
 
   const reset = () => {
-    setStep('scan'); setQrInput(''); setManualId(''); setConsumer(null)
+    setStep('scan'); setQrInput(''); setManualId(''); setManualAadhaarLast4('')
+    setExpiredPayloadUid(null); setConsumer(null)
     setSelectedProduct(null); setProductSearch(''); setSelectedCategory('All')
     setReceipt(null); setLookupError('')
   }
@@ -265,12 +421,12 @@ const ScanAndSellPage: React.FC = () => {
         {STEPS.map((s, i) => (
           <React.Fragment key={s.id}>
             <div className={`flex items-center gap-1.5 ${step === s.id ? 'text-gray-900 dark:text-white'
-                : stepIdx > i ? 'text-emerald-600 dark:text-emerald-400'
-                  : 'text-gray-400 dark:text-gray-600'}`}
+              : stepIdx > i ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-gray-400 dark:text-gray-600'}`}
             >
               <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black flex-shrink-0 ${step === s.id ? 'bg-red-600 text-white'
-                  : stepIdx > i ? 'bg-emerald-500 text-white'
-                    : 'bg-gray-100 dark:bg-gray-800'}`}
+                : stepIdx > i ? 'bg-emerald-500 text-white'
+                  : 'bg-gray-100 dark:bg-gray-800'}`}
               >
                 {stepIdx > i ? <CheckCircle2 className="w-3.5 h-3.5" /> : i + 1}
               </div>
@@ -298,8 +454,8 @@ const ScanAndSellPage: React.FC = () => {
                 key={m.id}
                 onClick={() => { setScanMode(m.id); setLookupError('') }}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition ${scanMode === m.id
-                    ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                  ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                   }`}
               >
                 <m.icon className="w-3.5 h-3.5" />
@@ -314,6 +470,7 @@ const ScanAndSellPage: React.FC = () => {
               <CameraScanner
                 onScan={handleQrScanned}
                 onError={setLookupError}
+                onSwitchToPaste={() => { setScanMode('paste'); setLookupError('') }}
               />
               {lookupMutation.isPending && (
                 <div className="flex items-center gap-2 justify-center text-gray-500 text-sm">
@@ -332,7 +489,7 @@ const ScanAndSellPage: React.FC = () => {
                 </label>
                 <textarea
                   className={`${inputCls} h-32 resize-none font-mono text-xs`}
-                  placeholder={'Paste the QR payload here.\nAccepted formats:\n  {"uid":"...","iat":...,"exp":...,"sig":"..."}\n  OR just paste what the QR scanner gives you.'}
+                  placeholder={'Paste the QR payload here.\nAccepted formats:\n  New (v2): {"cid":"<hash>","sig":"<hmac>"}\n  Legacy:   {"uid":"...","iat":...,"exp":...,"sig":"..."}\n  Or paste what the QR scanner gives you.'}
                   value={qrInput}
                   onChange={e => setQrInput(e.target.value)}
                   onPaste={e => {
@@ -369,44 +526,52 @@ const ScanAndSellPage: React.FC = () => {
               <div className="space-y-3">
                 <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-xl px-4 py-3">
                   <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
-                    ⚠️ Manual override — use only if the consumer's QR is unavailable.
-                    Ask the consumer for their registered <strong>Consumer ID</strong> from the app.
+                    ⚠️ Manual override — use only if QR code is unavailable or expired.
+                    Ask the consumer for their <strong>Reference ID</strong> and <strong>Aadhaar last 4 digits</strong>.
                   </p>
                 </div>
+
+                {/* Reference ID */}
                 <div>
                   <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest block mb-1.5">
-                    Consumer User ID (UUID)
+                    Consumer Reference ID
                   </label>
                   <input
+                    id="manual-ref-id"
                     className={`${inputCls} font-mono`}
-                    placeholder="e.g. c60c9977-527d-409b-87e9-9e033b586196"
+                    placeholder="64-char hex from consumer's app (Profile → My QR)"
                     value={manualId}
                     onChange={e => setManualId(e.target.value.trim())}
                   />
+                </div>
+
+                {/* Aadhaar last 4 — second factor */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest block mb-1.5">
+                    Aadhaar Last 4 Digits <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="manual-aadhaar-last4"
+                    className={`${inputCls} font-mono tracking-widest`}
+                    placeholder="e.g. 4729"
+                    maxLength={4}
+                    value={manualAadhaarLast4}
+                    onChange={e => setManualAadhaarLast4(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  />
                   <p className="text-[11px] text-gray-400 dark:text-gray-600 mt-1">
-                    Found in the consumer's app under Profile → Consumer ID.
+                    Ask the consumer to show their Aadhaar card — enter only the last 4 digits. This is required as a second factor.
                   </p>
                 </div>
               </div>
 
               <button
-                onClick={() => {
-                  // Build a manual lookup payload — wraps UUID as QR-style payload
-                  // The backend consumer/lookup endpoint accepts user ID directly
-                  const fakeQr = JSON.stringify({
-                    uid: manualId,
-                    iat: Math.floor(Date.now() / 1000),
-                    exp: Math.floor(Date.now() / 1000) + 1800,
-                    manual: true,
-                  })
-                  lookupMutation.mutate(fakeQr)
-                }}
-                disabled={!manualId.trim() || lookupMutation.isPending}
+                onClick={() => refLookupMutation.mutate({ refId: manualId, last4: manualAadhaarLast4 })}
+                disabled={!manualId.trim() || manualAadhaarLast4.length < 4 || refLookupMutation.isPending}
                 className="w-full py-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 transition"
               >
-                {lookupMutation.isPending
-                  ? <><Loader2 className="w-4 h-4 animate-spin" />Looking up…</>
-                  : <>Look Up Consumer <ChevronRight className="w-4 h-4" /></>}
+                {refLookupMutation.isPending
+                  ? <><Loader2 className="w-4 h-4 animate-spin" />Verifying…</>
+                  : <>Verify Consumer <ChevronRight className="w-4 h-4" /></>}
               </button>
             </>
           )}
@@ -415,12 +580,26 @@ const ScanAndSellPage: React.FC = () => {
           {lookupError && (
             <div className="flex items-start gap-2 text-red-600 dark:text-red-400 text-sm bg-red-50 dark:bg-red-500/10 px-3 py-2.5 rounded-xl border border-red-200 dark:border-red-500/20">
               <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <div>
+              <div className="flex-1 min-w-0">
                 <p className="font-semibold">{lookupError}</p>
-                {lookupError.includes('expired') && (
-                  <p className="text-xs mt-1 text-red-500 dark:text-red-500">
-                    Ask the consumer to open their TASMAC app → QR Code page → tap "Refresh QR"
-                  </p>
+                {/* Expired QR: offer one-click fallback using the uid from the payload */}
+                {expiredPayloadUid && scanMode === 'paste' && (
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    <p className="text-xs text-red-500">
+                      QR has expired, but the consumer ID was extracted. Switch to Manual ID and ask the consumer for their Aadhaar last 4 digits:
+                    </p>
+                    <button
+                      onClick={() => {
+                        setManualId(expiredPayloadUid)
+                        setScanMode('manual')
+                        setLookupError('')
+                        setExpiredPayloadUid(null)
+                      }}
+                      className="self-start text-xs font-bold text-amber-600 dark:text-amber-400 underline"
+                    >
+                      → Use Manual ID with this reference ({expiredPayloadUid.slice(0, 8)}…)
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -428,11 +607,11 @@ const ScanAndSellPage: React.FC = () => {
 
           {/* How-to help box */}
           <div className="bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-xl px-4 py-3 space-y-1.5">
-            <p className="text-xs font-bold text-blue-700 dark:text-blue-400">📖 How to scan</p>
+            <p className="text-xs font-bold text-blue-700 dark:text-blue-400">📖 How to verify</p>
             <ul className="text-xs text-blue-600 dark:text-blue-400 space-y-1 list-disc list-inside">
               <li><strong>Camera</strong> — Click "Open Camera", point at QR on consumer's phone. Auto-detects.</li>
-              <li><strong>Paste QR</strong> — Use a USB barcode scanner (it types the QR data here) or paste manually.</li>
-              <li><strong>Manual ID</strong> — Ask consumer for their UUID from the app (Profile page) if QR unavailable.</li>
+              <li><strong>Paste QR</strong> — Paste the QR payload text (USB scanner or clipboard). If expired, a fallback link appears.</li>
+              <li><strong>Manual ID</strong> — No camera? Ask consumer for their Reference ID + Aadhaar last 4 digits.</li>
             </ul>
           </div>
         </div>

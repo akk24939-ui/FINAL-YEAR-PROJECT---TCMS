@@ -78,7 +78,7 @@ def decrypt_field(cipher: str) -> str:
 
 # ── QR HMAC signing ───────────────────────────────────────────────────────────
 def sign_qr_reference(ref_id: str) -> str:
-    """Returns HMAC-SHA256 hex of the opaque reference ID."""
+    """Returns HMAC-SHA256 hex of the opaque reference ID using the current key."""
     return _hmac.new(
         settings.qr_hmac_secret.encode(),
         ref_id.encode(),
@@ -87,8 +87,42 @@ def sign_qr_reference(ref_id: str) -> str:
 
 
 def verify_qr_signature(ref_id: str, provided_sig: str) -> bool:
-    expected = sign_qr_reference(ref_id)
-    return _hmac.compare_digest(expected, provided_sig)
+    """Verify QR HMAC against current key AND previous key (graceful rotation)."""
+    # Check against current key
+    expected_current = sign_qr_reference(ref_id)
+    if _hmac.compare_digest(expected_current, provided_sig):
+        return True
+    # Check against previous key if set (rotation grace period)
+    if settings.qr_hmac_secret_prev:
+        expected_prev = _hmac.new(
+            settings.qr_hmac_secret_prev.encode(),
+            ref_id.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if _hmac.compare_digest(expected_prev, provided_sig):
+            return True
+    return False
+
+
+def compute_aadhaar_reference_id(aadhaar_number: str) -> str:
+    """Compute a permanent, deterministic, non-reversible reference ID from an Aadhaar number.
+
+    Implementation: HMAC-SHA256(aadhaar_number, QR_HMAC_SECRET) → hex string.
+
+    Security properties:
+    - Same Aadhaar always produces the same cid (deterministic → permanent identifier).
+    - Without the server secret, the original number cannot be recovered (non-reversible).
+    - Stored in ConsumerProfile.aadhaar_reference_id with a UNIQUE constraint.
+    - Used as the QR payload 'cid' — never the raw 12-digit number.
+
+    Per data-minimization best practice for government ID numbers (DPDP Act 2023 / Aadhaar Act 2016).
+    """
+    digits = aadhaar_number.replace(" ", "").replace("-", "")
+    return _hmac.new(
+        settings.qr_hmac_secret.encode(),
+        digits.encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 # ── Aadhaar-specific wrappers (semantic aliases over field encryption) ─────────

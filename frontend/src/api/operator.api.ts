@@ -108,6 +108,17 @@ export const operatorDashboardApi = {
 export const operatorConsumerApi = {
   lookupByQR: (qr_payload: string) =>
     operatorClient.post<ConsumerLookupResult>('/api/v1/operator/consumer/lookup', { qr_payload }),
+
+  /** Camera-less / expired-QR fallback: reference_id + Aadhaar last 4 digits */
+  lookupByRef: (referenceId: string, aadhaarLast4?: string) =>
+    operatorClient.post<ConsumerLookupResult>('/api/v1/operator/consumer/lookup', {
+      qr_payload: JSON.stringify({
+        manual: true,
+        uid: referenceId.trim(),
+        aadhaar_last4: (aadhaarLast4 ?? '').trim(),
+        iat: Math.floor(Date.now() / 1000),
+      }),
+    }),
 }
 
 // ── Products ──────────────────────────────────────────────────────────────────

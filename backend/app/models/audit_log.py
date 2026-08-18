@@ -33,6 +33,10 @@ class AuditEventType(str, enum.Enum):
     SELF_RESTRICTION_LOCKED = "self_restriction_locked"
     SELF_RESTRICTION_UNLOCKED = "self_restriction_unlocked"
     QR_GENERATED = "qr_generated"
+    QR_SCAN_SUCCESS = "qr_scan_success"     # Operator successfully verified a consumer QR
+    QR_SCAN_FAIL = "qr_scan_fail"           # Operator scan failed (bad sig, revoked, rate-limited)
+    QR_REVOKED = "qr_revoked"               # Consumer revoked their QR (security action)
+    QR_REGENERATED = "qr_regenerated"       # Consumer received a new QR after revocation
     PDF_DOWNLOADED = "pdf_downloaded"
     PHOTO_UPLOADED = "photo_uploaded"
     PROFILE_UPDATED = "profile_updated"
